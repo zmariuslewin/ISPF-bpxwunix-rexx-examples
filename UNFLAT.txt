@@ -1,0 +1,240 @@
+/* rexx */                                                                      
+trace o                                                                         
+                                                                                
+/* Copy a sequential input file in IEBUPDTE input format to          */         
+/* a library with replacement.                                       */         
+/* If the output library does not exist, it is created.              */         
+                                                                                
+/* There are two parameters:                                         */         
+/* 1) The input dsn which is a sequential file (or a library member) */         
+/*    which has the form of the input file to the IEBUPDTE utility   */         
+/*    with ./ ADD NAME  and possibly ./ ENDUP control cards.         */         
+/*    E.g.:                                                          */         
+/*                                                                   */         
+/*    ./ADD NAME=MBR1                                                */         
+/*    ABC                                                            */         
+/*    DEF                                                            */         
+/*    ./  ADD  NAME=MBR2,LIST=ALL                                    */         
+/*    UVW                                                            */         
+/*    XYZ                                                            */         
+/*    ./ENDUP                                                        */         
+/*                                                                   */         
+/* 2) The output dataset (a library).                                */         
+/*    If it does not exists, it is created.                          */         
+/*    If the second parameter is not specified, we create            */         
+/*    an output library with name, the name of the input             */         
+/*    sequential dataset, to which we add '.UNFLAT'                  */         
+/*    if a dataset with this name does not exist.                    */         
+/*    E.g. If the input dataset is 'BOZOO.SEQ', we create            */         
+/*    'BOEO.SEQ.UNFLAT' if such dataset does not exist,              */         
+/*    otherwise, we exit.                                            */         
+/*                                                                   */         
+/*    The output library, if its name is 'BOZO.LIB',                 */         
+/*    will contain the members:                                      */         
+/*    'BOZO.LIB(MBR1)' and                                           */         
+/*    'BOZO.LIB(MBR2)'.                                              */         
+                                                                                
+/* Examples of use:                                                  */         
+/* Command ===> tso unflat BOZO.SEQ                                  */         
+/*  The output library has its name obtained from the input          */         
+/*  sequential dataset by adding '.UNFLAT'.                          */         
+/*  The output library BOZO.SEQ.UNFLAT will be created or updated.   */         
+/*  If it already exist, its members will be replaced.               */         
+/* Command ===> tso unflat BOZO.SEQ.FLAT BOZO.LIB.UNFLAT             */         
+/*  The output library BOZO.LIB.UNFLAT will be created or updated.   */         
+                                                                                
+/* Method:                                                           */         
+/* We split the input file into a temporary z/OS Unix directory      */         
+/* then we copy with replacement the content of the temporary        */         
+/* directory to the MVS output library.                              */         
+/* Existing members with the same name in the output library         */         
+/* are overwritten.                                                  */         
+/* Split is done with the z/OS Unix utility awk.                     */         
+                                                                                
+/* z/OS V2R3 Unix awk limits from man pages:                         */         
+/*   Maximum record size at least LINE_MAX                           */         
+/*     Command ===> tso omvs                                         */         
+/*                  getconf LINE_MAX    (on my system, 2048)         */         
+/*                  exit                                             */         
+/*   Input must be text files.                                       */         
+                                                                                
+/* For bpxwunix command codepage:                                 */            
+lc_all = "Fr_FR.IBM-1147"  /* lc_all = "En_US.IBM-1140"           */            
+/* Parameter lc_all and bpxwunix cmd may be both changed but      */            
+/* do not need.                                                   */            
+parse source . . rexxname .    /* rexxname in upper case          */            
+parse arg dsnin dsnout .                                                        
+                                                                                
+                                                                                
+/*________________________________________________________________*/            
+/*                                                                */            
+/* Check input dsname.                                            */            
+/*________________________________________________________________*/            
+                                                                                
+dsnin = strip(dsnin,,"'")                 /* remove quotes if any */            
+msg_prev = msg('off')                                                           
+  sysdsn_dsnin = sysdsn("'"dsnin"'")                                            
+msg_off  = msg(msg_prev)                                                        
+if sysdsn_dsnin <> 'OK' then do                                                 
+   say rexxname": Input dsname "dsnin                                           
+   say '           ' sysdsn_dsnin                                               
+   zispfrc = 16                                                                 
+   say 'We exit with code' zispfrc                                              
+   if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'            
+   exit zispfrc                                                                 
+end /* if sysdsn_dsnin <> 'OK'                                    */            
+"alloc f(ddin) da('"dsnin"') shr reuse"                                         
+alloc_ddin_rc = rc                                                              
+if alloc_ddin_rc > 0 then do                                                    
+  say rexxname": Input dsname "dsnin                                            
+  say "          Allocate gave code "alloc_ddin_rc                              
+  zispfrc = 16                                                                  
+  say 'We exit with code' zispfrc                                               
+  if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'             
+  exit zispfrc                                                                  
+end /* if alloc_ddin_rc > 0                                   */                
+                                                                                
+/*________________________________________________________________*/            
+/*                                                                */            
+/* Check output dsname.                                           */            
+/*________________________________________________________________*/            
+                                                                                
+if dsnout = "" then do                                                          
+   dsnout = dsnin'.UNFLAT' /* default                             */            
+end /* if dsnout = ""                                             */            
+else dsnout = strip(dsnout,,"'")          /* remove quotes if any */            
+msg_prev = msg('off')                                                           
+  sysdsn_dsnout = sysdsn("'"dsnout"'")                                          
+msg_off  = msg(msg_prev)                                                        
+                                                                                
+select /* according to sysdsn_dsnout                              */            
+  when sysdsn_dsnout = 'OK' then nop                                            
+  when sysdsn_dsnout = 'DATASET NOT FOUND' then do /* allocate    */            
+    "alloc f(ddout) da('"dsnout"')  new catalog reuse ucount(1)",               
+    "like('"dsnin"') dsorg(po) dsntype(library,2)"                              
+    alloc_ddout_rc = rc                                                         
+    if alloc_ddout_rc > 0 then do                                               
+      say rexxname": Output dsname "dsnout                                      
+      say "          Allocate of new file gave code "alloc_ddout_rc             
+      zispfrc = 16                                                              
+      say 'We exit with code' zispfrc                                           
+      if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'         
+      exit zispfrc                                                              
+    end /* if alloc_ddout_rc > 0                                  */            
+  end /* when sysdsn_dsnout = 'DATASET NOT FOUND'                 */            
+  otherwise do                                                                  
+    say rexxname": Output dsname "dsnout                                        
+    say '           ' sysdsn_dsnout                                             
+    zispfrc = 16                                                                
+    say 'We exit with code' zispfrc                                             
+    if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'           
+    exit zispfrc                                                                
+  end /* otherwise                                                */            
+end /* select according to sysdsn_dsnout                          */            
+/* dsname  for cp.   ' ''"  ' gives '".                           */            
+udsnout = '"//'''dsnout'''"' /* cp  *  "//'BOZO.SEQ.PDSE'"        */            
+                                                                                
+/*________________________________________________________________*/            
+/*                                                                */            
+/* Split with awk.                                                */            
+/*________________________________________________________________*/            
+                                                                                
+call set_env /* z/OS Unix environment variables                   */            
+                                                                                
+drop stdout.; stdout.0 = 0    /* initialize standard output stem  */            
+drop stderr.; stderr.0 = 0    /* initialize standard error stem   */            
+                                                                                
+at_mbr = "^\.\/ *ADD +NAME="    /* regex, escape dot and slash    */            
+                                                                                
+/*  close( ) to manage number of open files                       */            
+tempdir = '/tmp/temp'random(99999)'/'                                           
+get_mbr = 'close(mbr); sub(/[ ,].*/,"",$2); mbr=$2'                             
+/* substitute first space or first comma and whatever follows     */            
+/* with nothing in second field (after equal sign).               */            
+/* mbr=gensub( ) failed.                                          */            
+                                                                                
+at_end = "^\.\/ *END"           /* regex, escape dot and slash    */            
+                                                                                
+/*  pattern followed by procedure between curly brackets          */            
+/*  In case of concatenated input, overwrite member of same name. */            
+/*  To append, use print >>                                       */            
+cmd = "mkdir "tempdir" && cd "tempdir" && ",                                    
+      "awk -F= ",               /* field separator is equal sign  */            
+      "'",                      /* start quote                    */            
+      "/"at_mbr"/{"get_mbr"; next}", /* obtain member name mbr    */            
+      ";/"at_end"/{next}",      /* in case concatenated input     */            
+      ";{print > mbr}",         /* write to file mbr              */            
+      "'",                      /* end quote                      */            
+      '&& cp 'tempdir'* 'udsnout, /* copy to MVS library          */            
+      "&& rm -r "tempdir        /* delete temporary directory     */            
+call bpxwunix cmd,"dd:ddin",stdout.,stderr.,env.                                
+bpxwunix_rc = rc                                                                
+call check_for_error                                                            
+                                                                                
+do i = 1 to stdout.0                                                            
+   say 'stdout.'i' = 'stdout.i                                                  
+end /* do i = 1 to stdout.0                                       */            
+                                                                                
+/*________________________________________________________________*/            
+/*                                                                */            
+/* Show created or updated library dsnout.                        */            
+/*________________________________________________________________*/            
+                                                                                
+if sysvar("sysispf") = 'ACTIVE',                                                
+ & sysvar("sysenv")  = 'FORE'    then do  /* ISPF foreground      */            
+   address ispexec                                                              
+   "control errors return"                                                      
+   call show_output_dataset                                                     
+   address /* from ispexec                                        */            
+end /*                                       ISPF foreground      */            
+/*________________________________________________________________*/            
+/*                                                                */            
+/* Clean up and exit.                                             */            
+/*________________________________________________________________*/            
+                                                                                
+drop stdout. stderr.                                                            
+msg_prev = msg('off')    /* in case ddout not allocated           */            
+  "free f(ddin,ddout)"                                                          
+msg_off  = msg(msg_prev)                                                        
+zispfrc = 0                                                                     
+if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'               
+exit zispfrc                                                                    
+                                                                                
+/*________________________________________________________________*/            
+/*                                                                */            
+set_env:                                                                        
+                                                                                
+env.0 = 3                                                                       
+env.1 = "PATH=.:/bin:usr/local/bin"                                             
+env.2 = "LC_ALL="lc_all                                                         
+env.3 = "_BPX_SHAREAS=MUST" /* ddname friendly, e.g. cat DD:DD01  */            
+                            /* cat "dd:dd01(mbr)"                 */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+/*                                                                */            
+check_for_error: procedure expose rexxname stderr.                              
+                                                                                
+  if stderr.0 > 0 then do /* stderr.0 was expected                */            
+     say rexxname": Execution of 'cmd' failed."                                 
+                                                                                
+     do i = 1 to stderr.0                                                       
+        say 'stderr.'i' = 'stderr.i                                             
+     end /* do i = 1 to stderr.0                                  */            
+                                                                                
+     zispfrc = 16                                                               
+     address ispexec 'vput zispfrc'                                             
+     exit zispfrc                                                               
+  end /* if stderr.0 > 0, stderr.0 was expected                   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+show_output_dataset: procedure expose dsnout                                    
+                                                                                
+/* ISPF foreground assumed                                        */            
+/* Equivalent to: Command ===> dslist pattern                     */            
+/* DSL in caps                                                    */            
+pattern = dsnout                                                                
+"select pgm(isrdslst) parm(DSL '"pattern"') suspend scrname(dslist)"            
+return                                                                          
+/*________________________________________________________________*/            

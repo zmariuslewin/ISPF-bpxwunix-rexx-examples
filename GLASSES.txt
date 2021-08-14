@@ -1,0 +1,447 @@
+/* rexx */                                                                      
+trace o                                                                         
+                                                                                
+ /* rexx and edit macro.                                         */             
+                                                                                
+ parse source . . rexxname .                                                    
+                                                                                
+ /* We called the rexx glasses as if each codepage was a         */             
+ /* different pair of glasses seeing the same data               */             
+ /* (the same hexadecimal code) in a different way.              */             
+ /* In another way:                                              */             
+ /* How a user, in another country, will see my data?            */             
+                                                                                
+ /* The rexx has one parameter: cp (for codepage).               */             
+ /* Examples of values for cp: 1147, FR, 1047, UX, 1140, US.     */             
+ /* It displays the Windows .bat or .cmd code to                 */             
+ /* extract from z/OS the present file                           */             
+ /* and to display on Windows its content                        */             
+ /* as seen on z/OS by a user with terminal codepage cp.         */             
+                                                                                
+ /* The generated code may be cut and pasted on Windows.         */             
+ /* Conversion of EBCDIC codepages to a target codepage          */             
+ /* (we chose UTF-8 as it is universal) should be done           */             
+ /* on z/OS with the z/OS tools, for instance, FTP,              */             
+ /* iconv or EDCICONV (because of no alternative that            */             
+ /* I know outside z/OS).                                        */             
+                                                                                
+ /* An alernative to this rexx is to change momentarily          */             
+ /* one's emulator terminal codepage.                            */             
+ /* Example for IBM Personal Communications:                     */             
+ /* Communication/Configuration/Session parameters/Host code     */             
+ /* page (z/OS Unix is 1047).                                    */             
+                                                                                
+ /* glasses FR to show on Windows how your file                  */             
+ /* is seen by a z/OS user in France.                            */             
+                                                                                
+ /* glasses UX to show on Windows how your file                  */             
+ /* is seen by z/OS Unix.                                        */             
+ /* We use the z/OS Unix IBM-1047 code page.                     */             
+                                                                                
+ /* glasses ME generates a script to save your file              */             
+ /* using your terminal codepage, in UTF-8.                      */             
+ /* It is the default.                                           */             
+ /* The user terminal codepage is provided by ISPF               */             
+ /* variable ztermcp5.                                           */             
+                                                                                
+ /* Method:                                                      */             
+ /* We copy the present file to a temporary z/OS Unix file       */             
+ /* without any conversion.                                      */             
+ /* We display:                                                  */             
+ /* 1) The code used by the native FTP client on                 */             
+ /* Windows to extract the temporary z/OS Unix file              */             
+ /* to a temporary Windows file in UTF-8,                        */             
+ /* requesting z/OS to convert from codepage cp                  */             
+ /* to UTF-8 and                                                 */             
+ /* 2) The code to display the Windows temporary UTF-8 file.     */             
+                                                                                
+ /* Cleaning of the temporary files:                             */             
+ /* 1) The code shown disappears when pressing F3.               */             
+ /* 2) The z/OS Unix temporary file, is deleted                  */             
+ /*    by the .bat or .cmd file when it executes.                */             
+ /*    It may be removed manually with:                          */             
+ /*    Command ===> epdf /tmp                                    */             
+ /*    then d defore the name.                                   */             
+ /* 3) The Windows temporary file is of the user responsability. */             
+                                                                                
+ /* Examples of use for glasses                                  */             
+ /*                                                              */             
+ /* 1) As a rexx, in a member list,                              */             
+ /*    the parameter is in the Prompt field.                     */             
+ /*    The question is: How a French user will see my file?      */             
+ /*         VIEW      BOZO.CNTL                                  */             
+ /* Command ===>                                                 */             
+ /*            Name     Prompt       Size                        */             
+ /* glasses__ BOZO01    FR                                       */             
+ /*                                                              */             
+ /* 2) As a rexx on a command line:                              */             
+ /* Command ==> tso glasses BOZO.CNTL(BOZO01) FR                 */             
+ /*                                                              */             
+ /* 3) As a rexx preserving lower case:                          */             
+ /* Command ==> cmde                                             */             
+ /* Enter TSO commands below:                                    */             
+ /* ===> glasses /u/bozo/bozo01 fr                               */             
+ /*                                                              */             
+ /* 4) As an edit macro:                                         */             
+ /*            BOZO.CNTL(BOZO01)                                 */             
+ /* Command ===> glasses                                         */             
+ /* Command ===> glasses UX                                      */             
+ /* Command ===> glasses 1047                                    */             
+                                                                                
+ address isredit                                                                
+ 'macro (parm)'                                                                 
+ macro_rc = rc                                                                  
+ select /* according to macro_rc                                 */             
+                                                                                
+ /*_______________ EDIT MACRO ___________________________________*/             
+   when macro_rc = 0  then do /* it is an edit macro             */             
+     '(save)   = user_state'                                                    
+     '(dataset) = dataset'                                                      
+     '(member)  = member'                                                       
+     /* member = '' for a sequential data set                    */             
+     if member <> '' then dataset = dataset"("member")"                         
+                                                                                
+     service = "view"                                                           
+                                                                                
+     /* If parm begins by dataset, remove it.                    */             
+     a = translate(strip(word(parm,1),,"'"))                                    
+     b = translate(dataset)                                                     
+     if length(a) = length(b) then do /* same length             */             
+        if a = b then                                                           
+           parm = subword(parm,2) /* remove first word with dataset */          
+     end /* if length(a) = length(b)                             */             
+     else do /* not the same length                              */             
+        parse var a a1 '('                                                      
+        parse var b b1 '('                                                      
+        if a1 = b1 then /* compare what is before left parent    */             
+           parm = subword(parm,2) /* remove first word with dataset */          
+     end /*     not the same length                              */             
+                                                                                
+     base_temp = 'temp'random(99999)                                            
+     temp = '/tmp/'base_temp                                                    
+                                                                                
+     /* Copy without conversion.                                 */             
+     /* The reason why we create a z/OS Unix temporary copy      */             
+     /* is that z/OS FTP conversion to UTF-8 does not support    */             
+     /* RECFM=FB.                                                */             
+     "rep '"temp"' .zf .zl "                                                    
+                                                                                
+     /* Build the .bat code in stem line.                        */             
+     drop line.                                                                 
+                                                                                
+     cp = codepage(word(parm,1))                                                
+     line.1  = ":Use Command ===> res  to show",                                
+               "hidden remark lines. PF3 to exit."                              
+     line.2  = ":This code is generated by: "rexxname word(parm,1)              
+     line.3  = ":Please CUT, PASTE this code to Windows",                       
+               "to a .bat or .cmd file"                                         
+     line.4  = ":to execute from the Windows command line",                     
+               "after editing."                                                 
+     line.5  = "rem line below is 'at sign' in column 1 followed by echo off"   
+     line.6  = "@echo off                                         "             
+     line.7  = "rem  Build ftp command file.                      "             
+     line.8  = "rem  Inner parentheses to remove extra blanks at right"         
+     line.9  = "rem  ^ is Windows escape character                "             
+     line.10 = "> ftp.txt (                                       "             
+     line.11 = " echo "userid()                                                 
+     line.12 = " (echo your_tso_user_password)                    "             
+     /*           We request z/OS to do the codepage conversion. */             
+     /*           en: encoding; mbcs: multibyte character set    */             
+     /*           mb: mbdataconn multi byte dataconn             */             
+     line.13 = " echo quote site en=mbcs mb=^("cp",UTF-8^)        "             
+     line.14 = " echo get "temp" C:/Temp/"base_temp".txt          "             
+     line.15 = " echo del "temp                                                 
+     line.16 = " echo qui                                         "             
+     line.17 = " )                                                "             
+     line.18 = "rem Alternatives for Windows 1252 or ISO8859-1:   "             
+     /*           sbd: single byte dataconn                      */             
+     line.19 = "rem   echo quote site sbd=^("cp",1252^)           "             
+     line.20 = "rem   echo quote site sbd=^("cp",ISO8859-1^)      "             
+     line.21 = "rem  Execute Windows native ftp.                  "             
+     line.22 = "ftp -s:ftp.txt "hostname()                                      
+     line.23 = "pause                                             "             
+     line.24 = "del ftp.txt                                       "             
+     line.25 = "rem  ___View file in UTF-8________________________"             
+     line.26 = "notepad C:/Temp/"base_temp".txt"                                
+     line.27 = "rem  /b  Return to caller                         "             
+     line.28 = "exit /b                                           "             
+     line.0 = 28                                                                
+                                                                                
+     call visualize /* content of stem line.                     */             
+                                                                                
+     'user_state = (save)'                                                      
+     'end'                                                                      
+     address /* from isredit                                     */             
+     exit                                                                       
+   end /* when macro_rc = 0             it is an edit macro      */             
+                                                                                
+ /*_______________ REXX _________________________________________*/             
+   when macro_rc = 20 then do /* assume it is a rexx             */             
+     /* rexx name to contain eiher '2E' or '2U'                  */             
+     parse arg dataset .                                                        
+     parm = arg(1) /* dataset is first word of parm              */             
+     dataset = strip(dataset,,"'")       /* remove quotes if any */             
+     address ispexec                                                            
+     'control errors return'                                                    
+                                                                                
+       call save_initial_macro /* reset at end if changed        */             
+                                                                                
+       if pos(left(dataset,1),'/.') = 0 then do           /* MVS */             
+            /* Check MVS dataset existence.                      */             
+            sysdsn_result = sysdsn("'"dataset"'")                               
+            if sysdsn_result <> 'OK' then do                                    
+               say                                                              
+               say rexxname" sysdsn('"dataset"') gave result:"                  
+               say sysdsn_result                                                
+               say 'We exit with code 16.'                                      
+               exit 16                                                          
+            end /* if sysdsn_result <> 'OK'                      */             
+            /* parm(parm) edit macro will inherit rexx parameters */            
+            "view dataset('"dataset"') macro("rexxname") parm(parm)"            
+       end /* MVS                                                */             
+       /* If z/OS Unix file does not exist, it will be created   */             
+       else "view file(dataset) macro("rexxname") parm(parm)"                   
+       view_from_rexx_rc = rc                                                   
+                                                                                
+       if view_from_rexx_rc <> 0 then do                                        
+          say                                                                   
+          say rexxname" View from rexx gave rc = "view_from_rexx_rc             
+               call restore_initial_macro                                       
+               call set_viewrc /* set up message stem            */             
+               /* say message for this return code               */             
+               say viewrc.view_from_rexx_rc                                     
+               say 'We exit with code 16.'                                      
+               exit 16                                                          
+       end /* if view_from_rexx_rc <> 0                          */             
+                                                                                
+       call restore_initial_macro                                               
+                                                                                
+     address /* from ispexec                                     */             
+     exit                                                                       
+   end /* when macro_rc = 20     assume it is a rexx             */             
+                                                                                
+ /*_______________ OTHERWISE ____________________________________*/             
+   otherwise do /* macro_rc different of 0 and 20                */             
+     say                                                                        
+     say rexxname" macro_rc = "macro_rc                                         
+     say "We exit with code 16."                                                
+     exit 16                                                                    
+   end /* otherwise                                              */             
+                                                                                
+ end /* select according to macro_rc                             */             
+ /* end of rexx main part (we exit in select)                    */             
+                                                                                
+ /*_________________________________________________________________*/          
+ save_initial_macro:                                                            
+                                                                                
+   address ispexec                                                              
+   'control errors return'                                                      
+     "vget zdaemac profile" /* variable in panel ISRUEDIT           */          
+     /* (ISRUEDIT is "EDIT Entry Panel" obtained by S before        */          
+     /* member name and a '/' in the prompt column).                */          
+     /* Confer also Command ===> edset                              */          
+     /*        and edit profile IMACRO.                             */          
+     zdaemac_old = zdaemac  /* save to reset at exit if changed     */          
+   address /* from ispexec                                          */          
+   return                                                                       
+ /*_________________________________________________________________*/          
+ restore_initial_macro:                                                         
+                                                                                
+   /* If initial edit macro name changed as                         */          
+   /* in View of a z/OS Unix directory,                             */          
+   /* reset initial edit macro name to previous value.              */          
+   address ispexec                                                              
+   'control errors return'                                                      
+     "vget zdaemac profile" /* variable in panel ISRUEDIT           */          
+     if zdaemac <> zdaemac_old then do                                          
+        zdaemac = zdaemac_old                                                   
+        "vput zdaemac profile" /* restore                           */          
+        /* to suppress: "verase zdaemac profile"                    */          
+     end /* if zdaemac was changed                                  */          
+   address /* from ispexec                                          */          
+   return                                                                       
+ /*_________________________________________________________________*/          
+ set_viewrc: procedure expose viewrc.                                           
+                                                                                
+ /* Set up viewrc. message stem for ISPF View.                      */          
+ /* viewrc.i contains the message for View return code i            */          
+ viewrc.0  = "Normal completion."                                               
+ viewrc.10 = "Member or generation (if specified) not found."                   
+ viewrc.12 = "VIEW has been disabled through the ISPF configuration",           
+             "table."                                                           
+ viewrc.14 = "Member, sequential data set, or z/OS UNIX file in use."           
+ viewrc.16 = "No members matched the pattern or no members in the PDS."         
+ viewrc.18 = "VSAM data set was specified but VSAM processing",                 
+             "not allowed."                                                     
+ viewrc.20 = "Severe error; unable to continue."                                
+ return                                                                         
+ /*_________________________________________________________________*/          
+ set_editrc: procedure expose editrc.                                           
+                                                                                
+ /* Set up editrc. message stem for ISPF Edit.                      */          
+ /* editrc.i contains the message for Edit return code i            */          
+ editrc.0  = "Normal completion; data was saved."                               
+ editrc.4  = "Normal completion; data was not saved."                           
+ editrc.10 = "Member or generation (if specified) not found."                   
+ editrc.14 = "Member, sequential data set, or z/OS UNIX file in use."           
+ editrc.12 = "YES was specified for the LOCK parameter."                        
+ editrc.16 = "No members matched the pattern or no members in the PDS."         
+ editrc.18 = "VSAM data set was specified but VSAM processing",                 
+             "not allowed."                                                     
+ editrc.20 = "Severe error; unable to continue."                                
+ return                                                                         
+ /*_________________________________________________________________*/          
+ codepage:                                                                      
+ parse arg cp                                                                   
+                                                                                
+ /* Note:                                                        */             
+ /* IBM-1140 is EBCDIC US codepage (default COBOL codepage)      */             
+ /* IBM-1147 is EBCDIC French codepage.                          */             
+ /* IBM-1047 is EBCDIC z/OS Unix codepage.                       */             
+ /* IBM-1208 is UTF-8.                                           */             
+ /* Use Command ===> tso omvs                                    */             
+ /*                  iconv -l                                    */             
+ /*                  exit                                        */             
+ /* for list of supported codepages.                             */             
+                                                                                
+ if datatype(cp) <> 'NUM' & cp <> '' then do                                    
+    cp = translate(cp) /* uppercase                              */             
+    if pos(left(cp,3),'UTF ISO') = 0 then /* not UTF or ISO      */             
+       cp = left(cp,2) /* abbreviation                           */             
+ end /* if datatype(cp) <> 'NUM' & cp <> ''                      */             
+                                                                                
+ /* Google search with:  "Compiled locales" inurl:IBM            */             
+ /*       En_US.IBM-1140 IBM-1140 is default COBOL codepage      */             
+ /*       Unix USA  DE   NO   SW   IT   SP   UK   FR   INTL IS   */             
+ /*       1047 1140 1141 1142 1143 1144 1145 1146 1147 1148 1149 */             
+                                                                                
+ select                                                                         
+   when cp = 'UX'   then return 1047 /* z/OS Unix                */             
+   when cp = 'UN'   then return 1047                                            
+   when cp = 'US'   then return 1140                                            
+   when cp = 'DE'   then return 1141                                            
+   when cp = 'NO'   then return 1142                                            
+   when cp = 'SW'   then return 1143                                            
+   when cp = 'IT'   then return 1144                                            
+   when cp = 'SP'   then return 1145                                            
+   when cp = 'UK'   then return 1146                                            
+   when cp = 'FR'   then return 1147                                            
+   when cp = 'IN'   then return 1148 /* International            */             
+   when cp = 'IS'   then return 1149                                            
+   /* Please complete                                            */             
+   when cp = 'UTF8'  then return 'UTF-8'                                        
+   when cp = 'UTF-8' then return 'UTF-8'                                        
+   when datatype(cp) = 'NUM' then return cp                                     
+   when cp = 'ME' ! cp = '' then do                                             
+     /* Default: use terminal code page.                         */             
+     address ispexec 'vget ztermcp5 shared'                                     
+    if left(ztermcp5,1) = '0' then do                                           
+       /* Suppress '0' at left but keep at least 3 digits. 037 is OK. */        
+       return strip(substr(ztermcp5,1,2),'L','0')!!substr(ztermcp5,3)           
+    end /* if left(ztermcp5,1) = '0'                             */             
+    else return ztermcp5                                                        
+   end /* when cp = 'ME' !! cp = ''                              */             
+   otherwise return cp                                                          
+ end /* select                                                   */             
+                                                                                
+ return                                                                         
+ /*______________________________________________________________*/             
+                                                                                
+hostname: procedure                                                             
+ /* Own ip address.                                              */             
+ /* Example of use in main code:                                 */             
+ /* ip = hostname()                                              */             
+ /* Confer: Command ===> tso hometest                            */             
+                                                                                
+ s = socket("initialize","sock01")                                              
+ s = socket("gethostname")                                                      
+ hostname = word(s,2)                                                           
+ s = socket("terminate","sock01")                                               
+return hostname                                                                 
+/*_______________________________________________________________*/             
+                                                                                
+ visualize: procedure expose line. rexxname                                     
+ /* Visualize.                                                   */             
+ if line.0 > 0 then do                                                          
+    if sysvar(sysispf) <> 'ACTIVE' then do                                      
+       do i = 1 to line.0                                                       
+          say line.i                                                            
+       end /* do i = 1 to line.0                                 */             
+       zispfrc = 0                                                              
+       exit zispfrc                                                             
+    end /* if sysvar(sysispf) <> 'ACTIVE'                        */             
+    else do /*       ispf ACTIVE                                 */             
+                                                                                
+       /* Allocate visualization file.                           */             
+       address tso                                                              
+       ran  = right(random(1,99999),5,'0')                                      
+       ddnm = 'dd'ran                    /* choose random ddname */             
+       call set_up_prefix /* create prefix for new file          */             
+       dsnprint = prefix"."rexxname".R"ran                                      
+       msg_prev = msg('off')                                                    
+       "alloc file("ddnm") da('"dsnprint"') new catalog",                       
+       "tracks space(5,5) reuse lrecl(80) recfm(f b) blksize(0)"                
+       alloc_rc = rc                                                            
+       if alloc_rc <> 0 then do                                                 
+          say rexxname "could not allocate the visualization file."             
+          say "We exit with code 16."                                           
+          say "alloc rc = "alloc_rc                                             
+          zispfrc = 16                                                          
+          address ispexec 'vput zispfrc'                                        
+          exit zispfrc                                                          
+       end /* if alloc_rc <> 0                                   */             
+       msg_off  = msg(msg_prev)                                                 
+       /* End of allocate visualization file.                    */             
+                                                                                
+       /* Write on visualization file.                           */             
+       "execio" line.0  "diskw" ddnm "(stem line. finis"                        
+       execio_rc = rc                                                           
+       if execio_rc <> 0 then do                                                
+          say rexxname "could not write on visualization file."                 
+          say "We exit with code 16."                                           
+          say "execio rc = "execio_rc                                           
+          zispfrc = 16                                                          
+          address ispexec 'vput zispfrc'                                        
+          exit zispfrc                                                          
+       end /* if execio_rc <> 0                                  */             
+       /* End of write on visualization file.                    */             
+                                                                                
+       /* Visualize.                                             */             
+       address ispexec                                                          
+       "control errors return"                                                  
+                                                                                
+       "control display lock" /* hidevar has semicolons          */             
+       /* res, x, hide, hi are edit commands. No macro used.     */             
+       hidevar =";x all 'rem' 1; hide x; hi off"                                
+  /*   maximum parm length: 200 with panel isrefr01                          */ 
+  /*   but edit command hide requires a specific panel configuration.        */ 
+  /*   "view dataset('"dsnprint"') macro(res) parm(hidevar) panel(isrefr01)" */ 
+       "view dataset('"dsnprint"') macro(res) parm(hidevar)"                    
+                                                                                
+       address /* from ispexec                                   */             
+       /* End of visualize.                                      */             
+                                                                                
+       /* Clean up.                                              */             
+       msg_prev = msg('off')                                                    
+          "free fi("ddnm")"                                                     
+          "del  '"dsnprint"'"                                                   
+       msg_off  = msg(msg_prev)     /* reset                     */             
+       /* End of clean up.                                       */             
+                                                                                
+    end /* ispf ACTIVE                                           */             
+ end /* if line.0 > 0                                            */             
+                                                                                
+ return                                                                         
+ /*___________________________________________________________________*/        
+                                                                                
+ set_up_prefix:                                                                 
+                                                                                
+ /* Set up new output file prefix.                                    */        
+ prefix = sysvar('syspref')              /* tso profile prefix        */        
+ uid    = sysvar('sysuid')               /* tso userid                */        
+ if prefix = '' then prefix = uid        /* use uid if null prefix    */        
+ if prefix <> '' & prefix <> uid then    /* different prefix than uid */        
+    prefix = prefix'.'uid                /* use prefix.uid            */        
+                                                                                
+ return                                                                         
+ /*___________________________________________________________________*/        

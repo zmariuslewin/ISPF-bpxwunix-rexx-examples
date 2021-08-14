@@ -1,0 +1,266 @@
+/* rexx */                                                                      
+trace o                                                                         
+                                                                                
+ /* rexx and edit macro.                                         */             
+                                                                                
+ parse source . . rexxname .                                                    
+                                                                                
+ /* Conversion from terminal codepage to UTF-8                   */             
+ /* if string '2U' or 'TOU'                                      */             
+ /* is included in the name of the rexx.                         */             
+ /* Conversion from UTF-8 to terminal codepage                   */             
+ /* if string '2E' or 'TOE'                                      */             
+ /* is included in the name of the rexx.                         */             
+                                                                                
+ /* Terminal codepage is given by:                               */             
+ /* address ispexec 'vget ztermcp5 shared'                       */             
+ /* You may possibly check with:                                 */             
+ /* Command ==> tso codepage     or                              */             
+ /* Command ==> tso cp                                           */             
+ /* if available.                                                */             
+                                                                                
+ /* e2u: from EBCDIC (terminal codepage) to UTF-8                */             
+ /* u2e: from UTF-8 to EBCDIC (terminal codepage)                */             
+                                                                                
+ /* Conversion is made with EDIT command REPLACE with            */             
+ /* conversion parameter either utf8 or ebcdic.                  */             
+                                                                                
+ /* We copy the edited file to a temporary file                  */             
+ /* using REPLACE with an explicit conversion parameter.         */             
+ /* We edit the temporary file.                                  */             
+ /* The user may use REPLACE or CREATE or CUT                    */             
+ /* edit commands to save the temporary file.                    */             
+ /* The temporary file is removed after edition.                 */             
+                                                                                
+ /* Examples of use for e2u                                      */             
+ /* (same examples  for u2e):                                    */             
+ /*                                                              */             
+ /* 1) As a rexx, in a member list:                              */             
+ /*         VIEW      BOZO.CNTL                                  */             
+ /* Command ===>                                                 */             
+ /*            Name     Prompt       Size                        */             
+ /* e2u______ BOZO01                                             */             
+ /*                                                              */             
+ /* 2) As a rexx on a command line:                              */             
+ /* Command ==> tso e2u BOZO.CNTL(BOZO01)                        */             
+ /*                                                              */             
+ /* 3) As a rexx preserving lower case:                          */             
+ /* Command ==> cmde                                             */             
+ /* Enter TSO commands below:                                    */             
+ /* ===> e2u /u/bozo/bozo01                                      */             
+ /* ===> e2u 'bozo.cntl(bozo01)' macro(a) parm(b)                */             
+ /*                                                              */             
+ /* 4) As an edit macro:                                         */             
+ /*            BOZO.CNTL(BOZO01)                                 */             
+ /* Command ===> e2u                                             */             
+                                                                                
+ /* Note:                                                        */             
+ /* IBM-1140 is EBCDIC US codepage (default COBOL codepage)      */             
+ /* IBM-1147 is EBCDIC French codepage.                          */             
+ /* IBM-1047 is EBCDIC z/OS Unix codepage.                       */             
+ /* IBM-1208 is UTF-8.                                           */             
+ /* Use Command ===> tso omvs                                    */             
+ /*                  iconv -l                                    */             
+ /*                  exit                                        */             
+ /* for list of supported codepages.                             */             
+ /* You may consider instead of this rexx:                       */             
+ /* (piping a MVS dataset into iconv,                            */             
+ /* converting from IBM-1140 to UTF-8)                           */             
+ /*  Command ===> tso omvs                                       */             
+ /*  cat "//'BOZO.CNTL(BOZO01)'" ! iconv -f 1140 -t UTF-8 > bozo01.utf8 */      
+ /*  oedit bozo01.utf8                                           */             
+ /*  exit      /* from OMVS */                                   */             
+                                                                                
+ address isredit                                                                
+ 'macro (parm)'                                                                 
+ macro_rc = rc                                                                  
+ select /* according to macro_rc                                 */             
+                                                                                
+ /*_______________ EDIT MACRO ___________________________________*/             
+   when macro_rc = 0  then do /* it is an edit macro             */             
+     /* rexx name to contain eiher '2E' or '2U'                  */             
+     call check_rexxname_and_set_target_codepage                                
+     '(save)   = user_state'                                                    
+     '(dataset) = dataset'                                                      
+     '(member)  = member'                                                       
+     /* member = '' for a sequential data set                    */             
+     if member <> '' then dataset = dataset"("member")"                         
+                                                                                
+     service = "view"                                                           
+                                                                                
+     /* If parm begins by dataset, remove it.                    */             
+     a = translate(strip(word(parm,1),,"'"))                                    
+     b = translate(dataset)                                                     
+     if length(a) = length(b) then do /* same length             */             
+        if a = b then                                                           
+           parm = subword(parm,2) /* remove first word with dataset */          
+     end /* if length(a) = length(b)                             */             
+     else do /* not the same length                              */             
+        parse var a a1 '('                                                      
+        parse var b b1 '('                                                      
+        if a1 = b1 then /* compare what is before left parent    */             
+           parm = subword(parm,2) /* remove first word with dataset */          
+     end /*     not the same length                              */             
+                                                                                
+     temp = '/tmp/temp'random(99999)' 'convert_to' file, save with',            
+            'REPLACE, CREATE or CUT'                                            
+                                                                                
+     /* Conversion done by REPLACE edit command.                 */             
+     /* convert_to contains either 'utf8' or 'ebcdic'            */             
+     /* depending on rexxname.                                   */             
+     /* 'ebcdic' means terminal code page                        */             
+     /* '(value in ISPF variable ztermcp5).                      */             
+     /* convert_to is set in:                                    */             
+     /* check_rexxname_and_set_target_codepage.                  */             
+                                                                                
+     "rep '"temp"' .zf .zl "convert_to                                          
+     address ispexec "edit file(temp) macro(hex)"                               
+     /* address tso "oedit "temp             Ok                  */             
+     call bpxwunix 'rm "'temp'"'       /* remove temp file       */             
+                                                                                
+     'user_state = (save)'                                                      
+     'end'                                                                      
+     address /* from isredit                                     */             
+     exit                                                                       
+   end /* when macro_rc = 0             it is an edit macro      */             
+                                                                                
+ /*_______________ REXX _________________________________________*/             
+   when macro_rc = 20 then do /* assume it is a rexx             */             
+     /* rexx name to contain eiher '2E' or '2U'                  */             
+     call check_rexxname_and_set_target_codepage                                
+     parse arg dataset .                                                        
+     parm = arg(1) /* dataset is first word of parm              */             
+     dataset = strip(dataset,,"'")       /* remove quotes if any */             
+     address ispexec                                                            
+     'control errors return'                                                    
+                                                                                
+       call save_initial_macro /* reset at end if changed        */             
+                                                                                
+       if pos(left(dataset,1),'/.') = 0 then do           /* MVS */             
+            /* Check MVS dataset existence.                      */             
+            sysdsn_result = sysdsn("'"dataset"'")                               
+            if sysdsn_result <> 'OK' then do                                    
+               say                                                              
+               say rexxname" sysdsn('"dataset"') gave result:"                  
+               say sysdsn_result                                                
+               say 'We exit with code 16.'                                      
+               exit 16                                                          
+            end /* if sysdsn_result <> 'OK'                      */             
+            /* parm(parm) edit macro will inherit rexx parameters */            
+            "view dataset('"dataset"') macro("rexxname") parm(parm)"            
+       end /* MVS                                                */             
+       /* If z/OS Unix file does not exist, it will be created   */             
+       else "view file(dataset) macro("rexxname") parm(parm)"                   
+       view_from_rexx_rc = rc                                                   
+                                                                                
+       if view_from_rexx_rc <> 0 then do                                        
+          say                                                                   
+          say rexxname" View from rexx gave rc = "view_from_rexx_rc             
+               call restore_initial_macro                                       
+               call set_viewrc /* set up message stem            */             
+               /* say message for this return code               */             
+               say viewrc.view_from_rexx_rc                                     
+               say 'We exit with code 16.'                                      
+               exit 16                                                          
+       end /* if view_from_rexx_rc <> 0                          */             
+                                                                                
+       call restore_initial_macro                                               
+                                                                                
+     address /* from ispexec                                     */             
+     exit                                                                       
+   end /* when macro_rc = 20     assume it is a rexx             */             
+                                                                                
+ /*_______________ OTHERWISE ____________________________________*/             
+   otherwise do /* macro_rc different of 0 and 20                */             
+     say                                                                        
+     say rexxname" macro_rc = "macro_rc                                         
+     say "We exit with code 16."                                                
+     exit 16                                                                    
+   end /* otherwise                                              */             
+                                                                                
+ end /* select according to macro_rc                             */             
+ /* end of rexx main part (we exit in select)                    */             
+                                                                                
+ /*_________________________________________________________________*/          
+ save_initial_macro:                                                            
+                                                                                
+   address ispexec                                                              
+   'control errors return'                                                      
+     "vget zdaemac profile" /* variable in panel ISRUEDIT           */          
+     /* (ISRUEDIT is "EDIT Entry Panel" obtained by S before        */          
+     /* member name and a '/' in the prompt column).                */          
+     /* Confer also Command ===> edset                              */          
+     /*        and edit profile IMACRO.                             */          
+     zdaemac_old = zdaemac  /* save to reset at exit if changed     */          
+   address /* from ispexec                                          */          
+   return                                                                       
+ /*_________________________________________________________________*/          
+ restore_initial_macro:                                                         
+                                                                                
+   /* If initial edit macro name changed as                         */          
+   /* in View of a z/OS Unix directory,                             */          
+   /* reset initial edit macro name to previous value.              */          
+   address ispexec                                                              
+   'control errors return'                                                      
+     "vget zdaemac profile" /* variable in panel ISRUEDIT           */          
+     if zdaemac <> zdaemac_old then do                                          
+        zdaemac = zdaemac_old                                                   
+        "vput zdaemac profile" /* restore                           */          
+        /* to suppress: "verase zdaemac profile"                    */          
+     end /* if zdaemac was changed                                  */          
+   address /* from ispexec                                          */          
+   return                                                                       
+ /*_________________________________________________________________*/          
+ set_viewrc: procedure expose viewrc.                                           
+                                                                                
+ /* Set up viewrc. message stem for ISPF View.                      */          
+ /* viewrc.i contains the message for View return code i            */          
+ viewrc.0  = "Normal completion."                                               
+ viewrc.10 = "Member or generation (if specified) not found."                   
+ viewrc.12 = "VIEW has been disabled through the ISPF configuration",           
+             "table."                                                           
+ viewrc.14 = "Member, sequential data set, or z/OS UNIX file in use."           
+ viewrc.16 = "No members matched the pattern or no members in the PDS."         
+ viewrc.18 = "VSAM data set was specified but VSAM processing",                 
+             "not allowed."                                                     
+ viewrc.20 = "Severe error; unable to continue."                                
+ return                                                                         
+ /*_________________________________________________________________*/          
+ set_editrc: procedure expose editrc.                                           
+                                                                                
+ /* Set up editrc. message stem for ISPF Edit.                      */          
+ /* editrc.i contains the message for Edit return code i            */          
+ editrc.0  = "Normal completion; data was saved."                               
+ editrc.4  = "Normal completion; data was not saved."                           
+ editrc.10 = "Member or generation (if specified) not found."                   
+ editrc.14 = "Member, sequential data set, or z/OS UNIX file in use."           
+ editrc.12 = "YES was specified for the LOCK parameter."                        
+ editrc.16 = "No members matched the pattern or no members in the PDS."         
+ editrc.18 = "VSAM data set was specified but VSAM processing",                 
+             "not allowed."                                                     
+ editrc.20 = "Severe error; unable to continue."                                
+ return                                                                         
+ /*_________________________________________________________________*/          
+ check_rexxname_and_set_target_codepage:                                        
+   /* Called as a rexx (variable convert_to then not used)          */          
+   /* or as an edit macro (variable convert_to used in REPLACE).    */          
+                                                                                
+   select /* according to content of rexx or macro name rexxname    */          
+     when pos('2U',rexxname)  > 0 then convert_to = 'utf8'                      
+     when pos('TOU',rexxname) > 0 then convert_to = 'utf8'                      
+     when pos('2E',rexxname)  > 0 then convert_to = 'ebcdic'                    
+     when pos('TOE',rexxname) > 0 then convert_to = 'ebcdic'                    
+     otherwise do                                                               
+       address ispexec 'vget ztermcp5 shared' /* terminal codepage  */          
+       say "Rexx or Edit macro mame "rexxname" must contain:"                   
+       say "   either '2U' (conversion from "ztermcp5" to UTF-8)"               
+       say "   or     '2E' (conversion to EBCDIC "ztermcp5"."                   
+       say "We exit with code 16."                                              
+       zispfrc = 16                                                             
+       if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'        
+       exit zispfrc                                                             
+     end /* otherwise                                               */          
+   end /* select                                                    */          
+                                                                                
+ return                                                                         
+ /*_________________________________________________________________*/          

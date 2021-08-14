@@ -1,0 +1,399 @@
+/* rexx */                                                                      
+trace o                                                                         
+parse source . . rexxname .     /* rexxname in upper case          */           
+parse arg pattern rest                                                          
+                                                                                
+/* _______________________________________________________________ */           
+/* Show dsnames corresponding to pattern in ISRDDN format.         */           
+/* _______________________________________________________________ */           
+                                                                                
+pattern = strip(pattern,,"'")     /* remove quotes if any          */           
+parse var pattern pattern '(' .   /* remove member if present      */           
+upper pattern                                                                   
+                                                                                
+/* Examples of pattern: boz%.cntl* or **.*cntl*                    */           
+/* Pattern as in ISPF 3.4 or lmdlist or ADRDSSU                    */           
+/* We allocate with bpxwdyn these datasets to ddnames              */           
+/* having a common string (we chose $).                            */           
+/* We issue isrddn only $                                          */           
+                                                                                
+/* The optional second parameter rest                              */           
+/* consists of isrddn commands separated by semicolons.            */           
+/* Not all commands in rest seem to be executed and                */           
+/* unexecuted commands remain in the command line.                 */           
+/* It is used to show user, command line examples of commands.     */           
+                                                                                
+/* The total number of datasets which may be allocated with        */           
+/* bpxwdyn depends on the TIOT ((task input output table) size     */           
+/* (PARMLIB member ALLOCxx).                                       */           
+/* Maximum number of allocated datasets for a 64K TIOT is 3273.    */           
+/* bpxwdyn does not depend on parameter DYNAMNBR.                  */           
+/* Cf. parameter DYNAMNBR in MVS JCL Reference.                    */           
+                                                                                
+/* __________________________________________________________________ */        
+/* Help starts                                                        */        
+/* Show datasets corresponding to pattern with isrddn.                */        
+/* Call examples:                                                     */        
+/* Command ===> tso sd               <- this help and isrddn          */        
+/* Command ===> tso sd help          <- this help                     */        
+/* Command ===> tso sd boz%.cnt*     <- all datasets for boz%.cnt*    */        
+/* Command ===> tso sd **.*cntl*     <- all datasets with string cntl */        
+/* Command ===> tso sd bozo          <- all datasets for alias bozo   */        
+/* Command ===> tso sd 'bozo.cntl(jcl01)'     <- bozo.cntl            */        
+/* Command ===> tso sd **.*procli* m *cob*    <- COBOL procedures     */        
+/* Please ignore extra message: 'Member not found' at top right  when */        
+/* not searching for members, in case it occurs.                      */        
+/* Help ends                                                          */        
+/* __________________________________________________________________ */        
+                                                                                
+/* ______ Trap allocation error messages _______________________________ */     
+/* Try to be invoked by a rexx, here 'viewit',                           */     
+/* which, if it exists,  will trap the output of say                     */     
+/* instructions in a file, then display it.                              */     
+   invoker = 'viewit'                                                           
+   if sysvar('sysnest') = 'NO' then do /* not invoked                    */     
+      /* execute invoker which executes rexxname                         */     
+      msg_prev = msg('off')                                                     
+        invoker rexxname arg(1)                                                 
+        xrc = rc                                                                
+      msg_off  = msg(msg_prev)                                                  
+      /* if xrc = -3 then invoker not found, execute rest of rexx        */     
+      if xrc <> -3 then exit   /* rexxname assumed to have been executed */     
+   end /* if sysvar('sysnest') = 'NO'      not invoked                   */     
+/* _____________________________________________________________________ */     
+                                                                                
+call is_help_needed(arg(1))     /* is_help_needed inherits arg(1)  */           
+                                                                                
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Obtain dsnames corresponding to pattern into stem dsn.           */          
+/* ________________________________________________________________ */          
+                                                                                
+call pattern_to_stem_dsn /* pattern and dsn. are exposed            */          
+/* result = 0 Ok                                                    */          
+/* result = 4 dsn. may be be incomplete. Continue anyway.           */          
+if result > 4 !,  /* Severe error or empty                          */          
+   dsn.0 = 0  then do                                                           
+                     zispfrc = result                                           
+                     address ispexec 'vput zispfrc'                             
+                     exit zispfrc                                               
+                   end                                                          
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Allocate dsnames.                                                */          
+/* ________________________________________________________________ */          
+                                                                                
+i = 0                           /* initialize allocation counter.   */          
+i_digits = min(6,length(dsn.0)) /* field length in ddname.          */          
+do k = 1 to dsn.0 /* for all datasets                               */          
+   dsn = dsn.k                                                                  
+   /* Try to allocate dsn to ddname 'D$'right(i,i_digits,'0')       */          
+   call allocate_dsname /* i i_digits dsn are exposed               */          
+                                                                                
+   if tiot_is_full = "yes" then do                                              
+      /* tiot full when allocation counter had value i              */          
+      /* free last ten allocated datasets for safety                */          
+      do m = i - 1 to i - 10 by -1                                              
+         ddtemp = 'd$'right(m,i_digits,'0') /* D$3200,  D$3199, ... */          
+         msg_prev = msg('off')                                                  
+           "free f("ddtemp")"                                                   
+         msg_off  = msg(msg_prev)                                               
+      end /* do m = i - 1 to i - 10 by -1    free last ten datasets */          
+      i = i - 11                /* allocation counter               */          
+      leave /* stop allocating                                      */          
+   end /* if tiot_is_full = "yes"                                   */          
+                                                                                
+end /* do k = 1 to dsn.0                                            */          
+                                                                                
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Execute isrddn                                                   */          
+/* ________________________________________________________________ */          
+                                                                                
+address tso                                                                     
+/* Show only ddnames with substring $.                              */          
+shlon = 'sh' /* SHort or LONg                                       */          
+              /* LONg for View of first 16 concatenated datasets.   */          
+if rest = '' then /* default                                        */          
+"isrddn only $;"shlon";cou;",              /*  cou: count           */          
+        "    m *AB*  dup v+srchfor help"   /*  <- shown but cases   */          
+                                           /*  m *ABC* executed     */          
+             else /* rest parameter not empty                       */          
+"isrddn only $;"shlon";"rest                                                    
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Free ddnames.                                                    */          
+/* ________________________________________________________________ */          
+                                                                                
+call free_ddnames                                                               
+                                                                                
+/*__________________________________________________________________*/          
+/* Normal exit.                                                     */          
+/*__________________________________________________________________*/          
+zispfrc = 0                                                                     
+address ispexec 'vput zispfrc'                                                  
+exit zispfrc                                                                    
+                                                                                
+/*__________________________________________________________________*/          
+/*____________________ CALLED ROUTINES _____________________________*/          
+pattern_to_stem_dsn: procedure expose pattern dsn.                              
+/*                                                                  */          
+/* Obtain successively all dataset names corresponding to pattern   */          
+/* and write into stem dsn.                                         */          
+                                                                                
+/* Input  pattern such as BOZ%.*CNT*                                */          
+/*        pattern as in ISPF 3.4, lmdlist, ADRDSSU.                 */          
+/* Output stem dsn.   dsn.i is i-th dsname obtained                 */          
+/*                    dsn.0 is the total number of dataset names    */          
+                                                                                
+/* return 0 All dataset names obtained.                             */          
+/* return 4 Error trying to obtain a dataset name other             */          
+/*          than first one.                                         */          
+/*          We do not try to obtain the next ones and               */          
+/*          dsn. may be incomplete.                                 */          
+/* return 8 Error trying to obtain the first dataset name or        */          
+/*          other error.                                            */          
+                                                                                
+drop dsn. ; dsn.0 = 0 /* Initialize output stem                     */          
+                                                                                
+address ispexec                                                                 
+'control errors return'                                                         
+                                                                                
+"lmdinit listid(lidv) level("pattern")"                                         
+   lmdinitrc = rc                                                               
+   if lmdinitrc <> 0 then do                                                    
+      say_error('lmdinit' lmdinitrc)                                            
+      return 8                                                                  
+   end /* if lmdinitrc <> 0                                         */          
+                                                                                
+/*__________________________________________________________________*/          
+/* Loop to obtain dsn.                                              */          
+/*__________________________________________________________________*/          
+dsn = "                  "    /* initialize                         */          
+"lmdlist listid("lidv") option(list) dataset(dsn)"                              
+   lmdlistrc = rc                                                               
+   if lmdlistrc <> 0 & lmdlistrc <> 8 then do                                   
+      say_error('lmdlist initial' lmdlistrc)                                    
+      "lmdlist listid("lidv") option(free)"                                     
+      "lmdfree listid("lidv")"                                                  
+      return 8                                                                  
+      end /* if lmdlistrc <> 0 & lmdlistrc <> 8                     */          
+do i = 1 while lmdlistrc = 0                                                    
+                                                                                
+   dsn.i = dsn                                                                  
+   dsn.0 = i                                                                    
+                                                                                
+   /* obtain next dsn (do while lmdlistrc = 0)                      */          
+"lmdlist listid("lidv") option(list) dataset(dsn)"                              
+    lmdlistrc = rc                                                              
+    if lmdlistrc <> 0 & lmdlistrc <> 8 then do                                  
+       say_error('lmdlist' lmdlistrc)                                           
+       "lmdlist listid("lidv") option(free)"                                    
+       "lmdfree listid("lidv")"                                                 
+       return 4                                                                 
+    end /* if lmdlistrc <> 0 & lmdlistrc <> 8                       */          
+ end /* do while lmdlistrc = 0      Main loop to obtain dsn         */          
+                                                                                
+"lmdlist listid("lidv") option(free)"                                           
+    lmdlistfreerc = rc                                                          
+    if lmdlistfreerc <> 0 then say_error('lmdlist free' lmdlistfreerc)          
+                                                                                
+"lmdfree listid("lidv")"                                                        
+    lmdfreerc = rc                                                              
+    if lmdfreerc <> 0 then say_error('lmdfree' lmdfreerc)                       
+                                                                                
+return 0                                                                        
+/*__________________________________________________________________*/          
+say_error: procedure expose zerrlm                                              
+                                                                                
+  w = words(arg(1))                                                             
+  thisrc = word(arg(1),w)          /* last word                     */          
+  function = subword(arg(1),1,w-1) /* what precedes                 */          
+  say ' '                                                                       
+  say function' error:'                                                         
+  say function' failed with rc = 'thisrc                                        
+  say         "ZERRLM  = '"strip(zerrlm)"'"                                     
+  say ' '                                                                       
+/*__________________________________________________________________*/          
+allocate_dsname: procedure expose i i_digits dsn tiot_is_full                   
+                                                                                
+/* Bypass alias to catalog                                          */          
+   if pos('.',dsn) = 0 then do /* no dot in dsname                  */          
+      msg_prev = msg('off')                                                     
+      stem_name = outtrap('discard.')                                           
+        address tso "listc alias ent('"dsn"')"                                  
+        listc_rc = rc                                                           
+      outtrap_off = outtrap('off')                                              
+      msg_off  = msg(msg_prev)                                                  
+     if listc_rc = 0 then return 0 /* bypass alias to catalog       */          
+   end /* if pos('.',dsn) = 0     no dot in dsname                  */          
+                                                                                
+i = i + 1 /* increase allocation counter by 1                       */          
+ddtemp = 'd$'right(i,i_digits,'0') /* D$001, D$0002, ...            */          
+call bpxwdyn "alloc shr reuse dd("ddtemp") dsn("dsn")"                          
+res = result                                                                    
+     if res <> 0 then do /* allocation failed                       */          
+        say                                                                     
+        say copies('_',22)                                                      
+        say                                                                     
+        say dsn': 'sysdsn("'"dsn"'")                                            
+        say "Error in allocating "dsn,                                          
+            "to "ddtemp" Bpxwdyn rc = "res                                      
+        call bpxwdyrc(res) /* info                                  */          
+        if datatype s99msg.0 = 'NUM' then                                       
+           if s99msg.0 > 0           then                                       
+              do k = 1 to s99msg.0                                              
+                 say "  "s99msg.i                                               
+              end /* do k = 1 to s99msg.0                           */          
+     end /* if res <> 0                                             */          
+                                                                                
+return res                                                                      
+/*__________________________________________________________________*/          
+free_ddnames: procedure expose i i_digits                                       
+/* i is the number of times that bpxwdyn alloc was executed.        */          
+                                                                                
+address tso                                                                     
+do k = 1 to i                                                                   
+   ddtemp = 'd$'right(k,i_digits,'0') /* D$001, D$002, ...          */          
+   msg_prev = msg('off')                                                        
+     "free f("ddtemp")"                                                         
+   msg_off  = msg(msg_prev)                                                     
+end /* do k = 1 to i                                                */          
+address /* from tso                                                 */          
+                                                                                
+return                                                                          
+/*__________________________________________________________________*/          
+is_help_needed:                                                                 
+                                                                                
+if length(space(arg(1))) = 0 then do                                            
+   /* if no parameter then 1) show help and                         */          
+   /*                      2) show datasets associated to prefix    */          
+   call show_help                                                               
+   call set_up_prefix                                                           
+   pattern = prefix                                                             
+   return /* Use prefix as pattern after showing help.              */          
+end /* if length(space(arg(1)) = 0                                  */          
+                                                                                
+w1 = word(arg(1),1) /* first parameter                              */          
+if wordpos(translate(w1),'HELP -HELP H -H ? -? /? AIDE SOS') > 0 then do        
+   /* if first parameter is HELP then 1) show help and              */          
+   /*                                 2) exit                       */          
+   call show_help                                                               
+   zispfrc = 0                                                                  
+   address ispexec 'vput zispfrc'                                               
+   exit zispfrc                                                                 
+end /* if wordpos(translate(w1),'...') > 0                          */          
+                                                                                
+return                                                                          
+/*__________________________________________________________________*/          
+show_help: procedure expose rexxname                                            
+                                                                                
+say ' Help for 'rexxname':'                                                     
+/* Show help between 'Help starts' and 'Help ends'                  */          
+help = 'no'                                                                     
+do i = 1 to sourceline()                                                        
+   if pos('Help starts',sourceline(i)) > 0 then do                              
+      help = "yes"                                                              
+      iterate                                                                   
+   end /* if pos('Help starts',sourceline(i)) > 0                   */          
+   if pos('Help ends',sourceline(i)) > 0 then leave                             
+   if help = 'yes' then say sourceline(i)                                       
+end /* do i = 1 to sourceline()                                     */          
+return                                                                          
+/*__________________________________________________________________*/          
+                                                                                
+bpxwdyrc: procedure expose last_Bpxwdyn_rc tiot_is_full                         
+numeric digits 12 /* say digits() gives default 9                   */          
+parse arg Bpxwdyn_rc                                                            
+                                                                                
+/*              Check BPXWDYN return code.                          */          
+/*              Says if different of zero.                          */          
+/*              Only update: last_Bpxwdyn_rc                        */          
+                                                                                
+/* Example of call:                                                 */          
+                                                                                
+/* Bpxwdyn_rc = bpxwdyn("alloc shr reuse dd("dd1") dsn("dsn1")")    */          
+/*      or                                                          */          
+/* call bpxwdyn "alloc shr reuse dd("dd1") dsn("dsn1")"             */          
+/* Bpxwdyn_rc = result                                              */          
+                                                                                
+/* if Bpxwdyn_rc <> 0 then do                                       */          
+/*    call bpxwdyrc(Bpxwdyn_rc)                                     */          
+/*    exit                                                          */          
+/* end /* if Bpxwdyn_rc <> 0 */                                     */          
+                                                                                
+select                                                                          
+  /* 'when' by decreasing expected order of frequency               */          
+  when Bpxwdyn_rc = 0  then nop /* Success.                         */          
+                                                                                
+  when Bpxwdyn_rc > 20 !, /* Dynamic allocation or output error.    */          
+       (Bpxwdyn_rc >= -2147483648 & Bpxwdyn_rc <= -1610612737) then do          
+       /* >0, or -1610612737 to -2147483648                         */          
+                                                                                
+       say                                                                      
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Dynamic allocation or dynamic output error.'                        
+                                                                                
+       /* Say first time if a series of identical Bpxwdyn_rc.       */          
+       /* Do not intercept uninitialized last_Bpxwdyn_rc            */          
+       signal off novalue                                                       
+       if Bpxwdyn_rc <> last_Bpxwdyn_rc then do                                 
+          last_Bpxwdyn_rc = Bpxwdyn_rc                                          
+          say 'If dynamic allocation:'                                          
+               rc_dec       = Bpxwdyn_rc                                        
+               rc_hex       = d2x(rc_dec,8)  /* 8 characters output */          
+               rc_hex_left  = left(rc_hex,4)                                    
+               rc_hex_right = right(rc_hex,4)                                   
+          say '  Bpxwdyn_rc in decimal:    ' Bpxwdyn_rc                         
+          say '  Bpxwdyn_rc in hexadecimal:' rc_hex                             
+          say '  It separates in two:'                                          
+          say '    dynamic allocation error reason code: 'rc_hex_left '(hex)'   
+          say '    information reason code:              'rc_hex_right '(hex)'  
+          say '  Please check for dynamic allocation error reason code',        
+                 rc_hex_left                                                    
+          say '  in "MVS Programming: Authorized Assembler Services Guide"'     
+          say '                       Interpreting DYNALLOC return codes'       
+          say '  Google search with quoted string:                '             
+          say '  "DYNALLOC macro routines return a nonzero"'                    
+          say '  e.g. 0238 corresponds to space unavailable in TIOT.'           
+          if rc_hex_left  = 0238 then tiot_is_full = "yes"                      
+       end /* first time if a series of identical Bpxwdyn_rc        */          
+       else say "Last previous error was identical."                            
+                                                                                
+  end /* Dynamic allocation or dynamic output error                 */          
+                                                                                
+  when Bpxwdyn_rc = 20 then do  /* Invalid parameter list.          */          
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Invalid parameter list.'                                            
+  end /* when Bpxwdyn_rc = 20                                       */          
+                                                                                
+  when Bpxwdyn_rc >= -9999 & Bpxwdyn_rc <= -21 then do                          
+       /* -21 to -9999       Key error                              */          
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Key error in key number 'right(Bpxwdyn_rc,2)-20'.'                  
+  end /* when Bpxwdyn_rc >= -9999 & Bpxwdyn_rc <= -21               */          
+                                                                                
+  when Bpxwdyn_rc >= -10099 & Bpxwdyn_rc <= -10000 then do                      
+       /* -100nn             Message processing error.              */          
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Message processing error.'                                          
+       say 'IEFDB476 returned code 'right(Bpxwdyn_rc,2)'.'                      
+  end /* when Bpxwdyn_rc >= -10099 & Bpxwdyn_rc <= -10000           */          
+                                                                                
+  otherwise say 'Unknown Bpxwdyn return code = 'Bpxwdyn_rc                      
+end /* select                                                       */          
+                                                                                
+return                                                                          
+/* ________________________________________________________________ */          
+                                                                                
+ set_up_prefix:                                                                 
+                                                                                
+ /* Set up new output file prefix.                                    */        
+ prefix = sysvar('syspref')              /* tso profile prefix        */        
+ uid    = sysvar('sysuid')               /* tso userid                */        
+ if prefix = '' then prefix = uid        /* use uid if null prefix    */        
+ if prefix <> '' & prefix <> uid then    /* different prefix than uid */        
+    prefix = prefix'.'uid                /* use prefix.uid            */        
+                                                                                
+ return                                                                         
+/* ________________________________________________________________ */          

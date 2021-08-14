@@ -1,0 +1,640 @@
+/* rexx */                                                                      
+trace o                                                                         
+                                                                                
+/* ________________________________________________________________ */          
+/* Help starts                                                      */          
+/* Display ddnames and associated dsnames                           */          
+/* in ISRDDN format                                                 */          
+/*                                                                  */          
+/* Input: JCL     (library member or sequential file with JCL) or   */          
+/*        JES2JCL (under SDSF after issuing SE).                    */          
+/* Edit mmacro or rexx.                                             */          
+/* Examples of use:                                                 */          
+/*                                                                  */          
+/* As an edit macro with JES2JCL SE:                                */          
+/*                                                                  */          
+/*      JOB DATA SET DISPLAY                                        */          
+/* COMMAND INPUT ===>                                               */          
+/* NP   ££££ DDNAME   StepName                                      */          
+/*         1 JESMSGLG JES2                                          */          
+/* se      2 JESJCL   JES2                                          */          
+/*                                                                  */          
+/*              BOZO01   (JOB12345)                                 */          
+/* Command ===> ddn                                                 */          
+/* ****** *************************                                 */          
+/* 000001         1 //BOZO     JOB                                  */          
+/*                                                                  */          
+/* Command ===> ddn m *EMBE*              <- member search          */          
+/* Command ===> ddn right                 <- dsorg, lrecl           */          
+/*                                                                  */          
+/* As an edit macro in a library member containing JCL:             */          
+/* Command ===> ddn                                                 */          
+/* Command ===> ddn m *EMBE*              <- member search          */          
+/* Command ===> ddn right                                           */          
+/*            BOZO.CNTL(JCL01)           - 01.0                     */          
+/* Command ===> ddn                                                 */          
+/* ****** ********************************* Top                     */          
+/* 000001 //BOZO    JOB '<°(((><',CLASS=D,...                       */          
+/* 000002 //ASM    EXEC PGM=ASMA90,PARM=NODECK                      */          
+/*                                                                  */          
+/* In ISPF 3.4 as a line command (rexx):                            */          
+/* ddn / cou                              <- count (default)        */          
+/* ddn / dup                              <- duplicates             */          
+/* ddn / right                            <- dsorg, lrecl           */          
+/*                                                                  */          
+/* In a member list as a line command (rexx):                       */          
+/* ddn  JCL01  right                                                */          
+/*                                                                  */          
+/* On command line as a rexx:                                       */          
+/* Command ===> tso ddn                   <- this help              */          
+/* Command ===> tso ddn help              <- this help              */          
+/* Command ===> tso ddn 'bozo.cntl(jcl01)' right                    */          
+/* Command ===> tso ddn  bozo.cntl(jcl01) <- quotes optional        */          
+/* Help ends                                                        */          
+/* ________________________________________________________________ */          
+                                                                                
+parse source . . rexxname .    /* rexxname in upper case            */          
+                                                                                
+call is_help_needed(arg(1))                                                     
+parse arg dsname rest                                                           
+dsname = translate(strip(dsname,,"'"))     /* remove quotes if any  */          
+                                                                                
+sysdsn_answer = ''                                                              
+if dsname <> '' then do                                                         
+   msg_prev = msg('off')                                                        
+     sysdsn_answer = sysdsn("'"dsname"'")                                       
+   msg_off  = msg(msg_prev)                                                     
+end /* if dsname <> ''                                              */          
+                                                                                
+select /* whether a rexx or a macro                                 */          
+when sysdsn_answer <> 'OK' then do         /* assume it is a macro  */          
+address isredit                                                                 
+'macro (rest)'                                                                  
+if rc <> 0 then call showhelp /* return                             */          
+call preprocess_for_jcllib                                                      
+                                                                                
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Build ddname. and dsnames. stems                                 */          
+/* ________________________________________________________________ */          
+                                                                                
+/* dsnames. is an associative array indexed by ddname               */          
+                                                                                
+'(recs) = linenum .zl'                                                          
+ddnames. = ''; dsnames. = ''; ddn = ''; dsn = ''                                
+k = 0        /* ddname counter                                      */          
+/* A new ddname ddn found will be placed in both string ddname_list */          
+/* and in stem ddnames. as ddnames.k                                */          
+/* dsnames corresponding to ddn will be placed                      */          
+/* in string dsnames.ddn (ddn non numeric index of stem).           */          
+/* Numeric index     of ddnames.  -> ddname                         */          
+/* Non numeric index of dsnames.  -> dsnames (in a string)          */          
+                                                                                
+ddname_list = ''                                                                
+/* ddname_list is used to check renamed ddname unicity.             */          
+do i = 1 to recs                                                                
+   '(li) = line 'i                                                              
+   call check_for_ddn                                                           
+     if ddn <> ''       &,                                                      
+        ddn <> last_ddn  then do                                                
+        last_ddn = ddn                                                          
+        call rename /* obtain unique ddn_new from ddn               */          
+        ddname_list = ddname_list ddn_new                                       
+        k = k + 1                                                               
+        ddnames.k = ddn_new                                                     
+     end /* if ddn <> ''  new ddname found                          */          
+     /* iterate until first ddn found                               */          
+     if last_ddn = 'LAST_DDN' then iterate                                      
+   call check_for_dsn                                                           
+     /* if new dsn found and dataset exists then concatenate        */          
+     if dsn <> '' then do                                                       
+        if sysdsn("'"dsn"'") = 'OK' then                                        
+             /* concatenate, do not check for dsname unicity        */          
+             dsnames.ddn_new = dsnames.ddn_new dsn                              
+     end /* if dsn <> ''                                            */          
+end /* do i = 1 to recs                                             */          
+ddnames.0 = k                                                                   
+address /* from isredit                                             */          
+                                                                                
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Allocate ddnames and dsnames for isrddn.                         */          
+/* ________________________________________________________________ */          
+                                                                                
+/* bpxwdyn is used for allocation (no DYNAMNBR constraint).         */          
+/* Each dataset is allocated to an individual ddname.               */          
+/* ddnames are concatenated by groups.                              */          
+/* At the end, we free the first ddname of the concatenation,       */          
+/* then all following ddnames in the concatenation.                 */          
+                                                                                
+j = 0            /* counter for new ddnames                         */          
+"newstack"       /* stack of ddnames to free at end                 */          
+do k = 1 to ddnames.0 /* for all ddnames, renamed previously        */          
+                      /* for unicity and isrddn                     */          
+   ddn = ddnames.k                                                              
+   if words(dsnames.ddn) = 0 then iterate /* ddname with no datasets */         
+                                                                                
+   /* Allocate dsnames to individual ddnames.                       */          
+     ddlist = '' /* ddlist for bpxwdyn concat                       */          
+     do n = 1 to words(dsnames.ddn)                                             
+        dsn = word(dsnames.ddn,n)                                               
+        /* ddtemp is the ddname to which dsn will be allocated      */          
+        if n = 1 then do    /* first dsname                         */          
+           ddtemp = ddn                                                         
+           queue ddn        /* remember to free at end              */          
+        end /* if n = 1        first dsname                         */          
+        else do /* n > 1                                            */          
+             j = j + 1                                                          
+             ddtemp = "D"j                                                      
+             queue ddtemp  /* remember to free at end               */          
+        end     /* n > 1                                            */          
+        call bpxwdyn "alloc shr reuse dd("ddtemp") dsn("dsn")"                  
+        res = result                                                            
+             if res <> 0 then do /* allocation failed               */          
+                say                                                             
+                say dsn': 'sysdsn("'"dsn"'")                                    
+                say "Error in allocating "dsn,                                  
+                    "to "ddtemp" Bpxwdyn rc = "res                              
+                call bpxwdyrc(res) /* info                          */          
+                say "Entry  "n" for "ddn                                        
+                if datatype s99msg.0 = 'NUM' then                               
+                   if s99msg.0 > 0           then                               
+                      do k = 1 to s99msg.0                                      
+                         say "  "s99msg.i                                       
+                      end /* do k = 1 to s99msg.0                   */          
+             end /* if res <> 0                                     */          
+        ddlist = ddlist','ddtemp /* for bpxwdyn concat              */          
+     end /* do n = 1 to words(dsnames.ddn)                          */          
+     ddlist = substr(ddlist,2) /* remove starting comma             */          
+                                                                                
+   if pos(',',ddlist) > 0 then do /* at least two ddnames           */          
+     call bpxwdyn "concat ddlist("ddlist")"                                     
+          res = result                                                          
+          if res <> 0 then do /* concatenation failed               */          
+             say                                                                
+             say "Error in concatenating to "ddn,                               
+                 "- Bpxwdyn rc = "res                                           
+             call bpxwdyrc(res) /* info                             */          
+             say "ddlist = "ddlist                                              
+             if datatype s99msg.0 = 'NUM' then                                  
+                if s99msg.0 > 0           then                                  
+                   do k = 1 to s99msg.0                                         
+                      say "  "s99msg.i                                          
+                   end /* do k = 1 to s99msg.0                      */          
+          end /* if res <> 0                                        */          
+   end /* if pos(',',ddlist) > 0    at least two ddnames            */          
+                                                                                
+end /* do k = 1 to ddnames.0  for all ddnames,  ddn = ddnames.k     */          
+                                                                                
+/* ________________________________________________________________ */          
+/*                                                                  */          
+/* Execute isrddn                                                   */          
+/* ________________________________________________________________ */          
+                                                                                
+/* Show only ddnames with substring $.                              */          
+shlon = 'lon' /* SHort or LONg                                      */          
+              /* LONg for View of first 16 concatenated datasets.   */          
+if rest = '' then /* default                                        */          
+"isrddn only $;"shlon";cou;",              /*  cou: count           */          
+        "    m *AB*  dup v+srchfor help"   /*  <- shown but cases   */          
+                                           /*  m *ABC* executed     */          
+             else /* rest parameter not empty                       */          
+"isrddn only $;"shlon";"rest                                                    
+                                                                                
+/* Free ddnames.                                                    */          
+msg_prev = msg('off')                                                           
+  do queued()                                                                   
+     pull ddn           /* uppercase                                */          
+     "free f("ddn")"                                                            
+  end /* do queued                                                  */          
+msg_off  = msg(msg_prev)                                                        
+"delstack"                                                                      
+                                                                                
+exit 0                                                                          
+end /* when sysdsn("'"dsname"'") <> 'OK'     assume it is a macro   */          
+when sysdsn_answer = 'OK' then do         /* assume it is a rexx    */          
+  /* call myself as an edit macro                                   */          
+  ispexec "view dataset('"dsname"') macro("rexxname") parm(rest)"               
+  exit                                                                          
+end /* when sysdsn("'"dsname"'") = 'OK'      assume it is a rexx    */          
+otherwise do                                                                    
+  say rexxname": Invalid parameter "arg(1)                                      
+  exit 16                                                                       
+end /* otherwise                                                    */          
+end /* select whether a rexx or a macro                             */          
+/* All when and otherwise in select exit.                           */          
+                                                                                
+/* _____________________ Called routines __________________________ */          
+rename: procedure expose ddname_list ddn ddn_new                                
+                                                                                
+  /* Rename current ddname ddn into ddn_new for                     */          
+  /* unicity and allocation by isrddn.                              */          
+  /* Input:  ddname_list ddn                                        */          
+  /* Output: ddn_new                                                */          
+  /* Common string is '$'.                                          */          
+  /* The last two or three characters are changed.                  */          
+  /* isrddn displays in alphabetic order.                           */          
+                                                                                
+  select /* according to ddn length                                 */          
+    when length(ddn) = 8 then  ddn_new = substr(ddn,1,6)'$1'                    
+    when length(ddn) = 7 then  ddn_new = substr(ddn,1,6)'$1'                    
+    otherwise ddn_new = ddn'$1'              /* ddn has length < 7  */          
+  end /* select according to ddn length                             */          
+                                                                                
+  if wordpos(ddn_new,ddname_list) > 0 then do /* already there      */          
+     do j = 2 to 99  /* add sequence number before '$'              */          
+        max_len = 8 - length('$'j)                                              
+        ddn_new = strip(substr(ddn,1,max_len))'$'j                              
+        if wordpos(ddn_new,ddname_list) = 0 then leave /* unique    */          
+     end /* do j = 2 to 99  add sequence number before '$'          */          
+  end /* if wordpos(ddn_new,ddname_list) > 0 already there          */          
+                                                                                
+  /* Alternative for renaming:                                                  
+  n = n + 1                     /* sequential number                */          
+  ddn_new = left(ddn,5)         /* first 5 characters of ddname     */          
+  /* prefix by common '$' and 2 digits sequential number            */          
+  ddn_new = '$'right(n,2,'0')!!ddn_new                                          
+  */                                                                            
+                                                                                
+  return                                                                        
+/* ________________________________________________________________ */          
+                                                                                
+check_for_ddn: procedure expose li dsn_search ddn                               
+/* input li    current line                                         */          
+/* output dsn_search  "yes" or "no" suspend dsn search              */          
+/*        When ' PROC ' is found, disallow dsn search               */          
+/*        until ' DD '  is met.                                     */          
+/* output ddn  ddname if present in current line, otherwise ''      */          
+                                                                                
+  ddn = ''              /* ddname absent by defaut                  */          
+                                                                                
+  w1 = left(word(li,1),3)  /* first three chars of first word       */          
+  if wordpos(w1,"//* XX* ++*") > 0 then return /* comment           */          
+                                                                                
+  /* If ' PROC ' present, DSN may be a parameter.                   */          
+  if pos(' PROC ',li) > 0 then do                                               
+     dsn_search = 'no'    /* suspend dsn search                     */          
+     return                                                                     
+  end /* if pos(' PROC ',li) > 0                                    */          
+                                                                                
+  p = pos(' DD ',li)                                                            
+  if p > 0  then do /* ' DD ' present                               */          
+     dsn_search = 'yes'      /* allow dsn search                    */          
+     lidd = substr(li,1,p-1) /* before ' DD '                       */          
+     q1 = pos('//',lidd)                                                        
+     if q1 > 0 then ddn = substr(lidd,q1+2) /* '//' found           */          
+     else do /* '//' not found                                      */          
+             q2 = max(pos(' XX',lidd),pos(' X/',lidd))                          
+             if q2 > 0 then ddn = substr(lidd,q2+3)                             
+         end     /* '//' not found                                  */          
+     ddn = strip(ddn) /* remove blanks from both sides              */          
+     if ddn      <> '' &,  /* not empty and not commented           */          
+     left(ddn,1) <> '*' then do                                                 
+        /* if dot present in ddn, keep part after last dot          */          
+        ddn = translate(ddn," ",".") /* replace dot by space        */          
+        ddn = word(ddn,words(ddn))   /* last word                   */          
+     end /* if ddn <> '' & left(ddn,1) <> '*'                       */          
+  end /* p > 0     ' DD ' present                                   */          
+                                                                                
+return                                                                          
+/* ________________________________________________________________ */          
+                                                                                
+check_for_dsn: procedure expose li dsn_search dsn                               
+/* input li    current line                                         */          
+/* output dsn_search  "yes" or "no" suspend dsn search              */          
+/*        When ' PROC ' is found, disallow dsn search               */          
+/*        until ' DD '  is met.                                     */          
+/* output dsn  dsname if present in current line, otherwise ''      */          
+                                                                                
+  dsn = ''              /* dsname absent by defaut                  */          
+                                                                                
+  /* If ' PROC ' present, DSN may be a parameter.                   */          
+  if pos(' PROC ',li) > 0 then do                                               
+     dsn_search = 'no'                                                          
+     return                                                                     
+  end /* if pos(' PROC ',li) > 0                                    */          
+                                                                                
+  w1 = left(word(li,1),3)  /* first three chars of first word       */          
+  if wordpos(w1,"//* XX* ++*") > 0 then return /* comment           */          
+  if pos(' SET ',li)  > 0 then return                                           
+                                                                                
+  if dsn_search = 'no' then return                                              
+                                                                                
+  p = pos('DSN=',li)                                                            
+  if p > 0 then lidsn = substr(li,p + 4) /* after 'DSN='            */          
+  else do /* 'DSN=' not present, check for 'DSNAME='                */          
+     p = pos('DSNAME=',li)                                                      
+     if p > 0 then lidsn = substr(li,p + 7) /* after 'DSNAME='      */          
+  end  /* 'DSN=' not present, check for 'DSNAME='                   */          
+                                                                                
+  /* Check first character after 'DSN=' or 'DSNAME='.               */          
+  if pos(left(lidsn,1),', ') > 0 then return                                    
+                                                                                
+  if p > 0  then do /* 'DSN=' or 'DSNAME=' present                  */          
+     lidsn = translate(lidsn," ",",") /* replace comma by space     */          
+     lidsn = word(lidsn,1)            /* first word                 */          
+     lidsn  = strip(lidsn,,"'")       /* remove quotes if any       */          
+     if pos('&',lidsn) = 0   &,       /* no '&'                     */          
+        left(lidsn,1) <> '*' &,       /* no referback               */          
+        lidsn <> 'NULLFILE'     then dsn = lidsn                                
+  end /* p > 0     'DSN=' or 'DSNAME=' present                      */          
+                                                                                
+return                                                                          
+/* ________________________________________________________________ */          
+                                                                                
+preprocess_for_jcllib:                                                          
+                                                                                
+  /* address isredit       already done                             */          
+                                                                                
+  /* Add DD cards in edited file referring JCLLIB libraries,        */          
+  /* as, in main body, only DD cards are processed and not JCLLIB.  */          
+  /*                                                                */          
+  /* Example:                                                       */          
+  /* We replace in edited file                                      */          
+  /*   //    JCLLIB ORDER=(DSN1,DSN2,                               */          
+  /*   //                  DSN3)                                    */          
+  /* by                                                             */          
+  /*   //    JCLLIB ORDER=(DSN1,DSN2,                               */          
+  /*   //JCLLIB DD DSN=DSN1                                         */          
+  /*   //JCLLIB DD DSN=DSN2                                         */          
+  /*   //                  DSN3)                                    */          
+  /*   //JCLLIB DD DSN=DSN3                                         */          
+                                                                                
+  /* First line with JCLLIB                                         */          
+  /*  '.*' any string of characters in regular expression           */          
+  /*  ' *' any number of blanks                                     */          
+  regex = "r'//.* JCLLIB *ORDER='"                                              
+  "find "regex" first"                                                          
+  frc = rc                                                                      
+  if frc <> 0 then return                                                       
+  "(i,j) = cursor"     /* '//' at line i column j                   */          
+  "(li) = line .zcsr"  /* first line JCLLIB                         */          
+  if substr(li,j+2,1) = '*' then return /* '//*' was present    */  */          
+                                                                                
+  /* Obtain first word after 'ORDER='                               */          
+  p = pos('ORDER=',li)                                                          
+  q = pos('// ',li)                                                             
+  w1 = word(substr(li,p+length('ORDER=')),1)                                    
+                                                                                
+  /* Process line with 'ORDER=' and continuations                   */          
+  do m = 1 to 10 /* process at maximum 9 JCLLIB continuation lines  */          
+     libs = translate(w1,'   ','(),')   /* remove parents and comma */          
+     do k = words(libs) to 1 by -1                                              
+        string = copies(' ',q-2),                                               
+                "//JCLLIB DD DSN="translate(word(libs,k)),                      
+                " Added by "rexxname                                            
+        "line_after "i" = '"string"'"                                           
+     end /* do k = 1 to words(libs)                                 */          
+     last_char = substr(w1,length(w1))                                          
+     if last_char <> ',' then leave m /* no continuation            */          
+     i = i + words(libs) /* at end of inserted DD cards             */          
+     do n = 1 to 10 /* maximum ten comments                         */          
+        i = i + 1                                                               
+        "(li) = line" i       /* next line                          */          
+        if pos('//*',li) > 0 then iterate n /* bypass comment       */          
+        q = pos('// ',li)     /* not a comment                      */          
+        w1 = word(substr(li,q+3),1)                                             
+        iterate m /* w1 obtained                                    */          
+     end /* do n = 1 to 10                                          */          
+     return  /* if more than 10 comments                            */          
+  end /* do m = 1 to 10    maximum JCLLIB 9 continuation lines      */          
+                                                                                
+  return                                                                        
+/* ________________________________________________________________ */          
+                                                                                
+is_help_needed: procedure                                                       
+ parse arg parm                                                                 
+ parm = translate(parm) /* uppercase                                */          
+                                                                                
+ help = 'HELP -HELP H -H ? -? /? AIDE SOS'                                      
+ do k = 1 to words(help)                                                        
+    if wordpos(word(help,k),parm) > 0 then call showhelp /* no return */        
+ end /* do k = 1 to words(help)                                     */          
+                                                                                
+ return /* no help needed                                           */          
+/*__________________________________________________________________*/          
+                                                                                
+showhelp:                                                                       
+/* for bpxwunix command codepage:                                 */            
+lc_all = "Fr_FR.IBM-1147"  /* lc_all = "En_US.IBM-1140"           */            
+                                                                                
+/*________________________________________________________________*/            
+                                                                                
+/* Extract help from source and display it.                       */            
+                                                                                
+/* This subroutine is incorporated in the rexx which contain      */            
+/* the first group of lines to display.                           */            
+/* We assume that the group of lines to display in the calling    */            
+/* rexx has its first line containing the string 'Help starts'    */            
+/* and its last line containing the string 'Help ends'            */            
+/* The subroutine is placed after the group of lines to display.  */            
+/* It is called by: call showhelp and it does not return.         */            
+/* Example:                                                       */            
+/* /* rexx                                */                      */            
+/* /* Help starts                         */                      */            
+/* /* This is an example of calling rexx. */                      */            
+/* /* Help ends                           */                      */            
+/* call showhelp                                                  */            
+/* exit                                                           */            
+/* showhelp:                                                      */            
+/* ...                                                            */            
+/* return                                                         */            
+/*________________________________________________________________*/            
+/*                                                                */            
+                                                                                
+parse source . . rexxname rexxddn .     /* rexxname in upper case */            
+                                                                                
+regex1 = 'Help' 'starts'                                                        
+regex2 = 'Help' 'ends'                                                          
+/* -n:   suppress automatic printing                              */            
+/*  p:   print                                                    */            
+/*  Print only between lines with regex1 included and             */            
+/*  lines with regex2 included.                                   */            
+sed = "sed -n '/"regex1"/,/"regex2"/p'" /* sed -n '/A/,/B/p'      */            
+/*  Stop when first regex2 met.                                   */            
+/*  q: quit                                                       */            
+sed = "sed -n -e '/"regex1"/,/"regex2"/p'",                                     
+             "-e '/"regex2"/q'"                                                 
+                                                                                
+temp = '/tmp/temp'random(1,99999)  /* temporary file              */            
+                                                                                
+call set_env /* z/OS Unix environment variables                   */            
+drop stdout.; stdout.0 = 0    /* initialize standard output stem  */            
+drop stderr.; stderr.0 = 0    /* initialize standard error stem   */            
+if rexxddn = '?' ! rexxname = '?' then do /* use sourceline       */            
+                                                                                
+  /* Copy content of presently edited file into stem line.        */            
+  trace_previous = trace("o") /* no trace                         */            
+  drop line.                                                                    
+  do i = 1 to sourceline()                                                      
+     line.i = sourceline(i)                                                     
+  end /* do i = 1 to sourceline()                                 */            
+  line.0 = sourceline()                                                         
+  trace(trace_previous)                                                         
+                                                                                
+  /* cmd = 'cat | 'sed' > 'temp                              Ok   */            
+  cmd = 'cat | 'sed' | tee 'temp /* write on stdout. and temp     */            
+  call bpxwunix cmd,line.,stdout.,stderr.,env.                                  
+  bpxwunix_rc = rc                                                              
+end /* if rexxddn = '?' ! rexxname = '?'     use sourceline       */            
+else do /* use rexxddn and rexxname                               */            
+  /*    sed ... < cat "dd:dd1(mbr1)" > temp               syntax  */            
+  /* cmd = sed' < cat "dd:'rexxddn'('rexxname')" > 'temp     Ok   */            
+  /* tee writes on standard output and file temp.                 */            
+  /* stdout. is used if ISPF not active.                          */            
+  cmd = sed' < cat "dd:'rexxddn'('rexxname')" | tee 'temp                       
+  rc = bpxwunix(cmd,,stdout.,stderr.,env.)                                      
+  bpxwunix_rc = rc                                                              
+end /*     use rexxddn and rexxname                               */            
+                                                                                
+call check_for_error                                                            
+drop line. stderr.                                                              
+                                                                                
+if sysvar(sysispf) = 'ACTIVE' then do /* ISPF ACTIVE              */            
+   address ispexec                                                              
+     "control errors return"                                                    
+     zedsmsg = 'F3 to exit'  /* top right corner                  */            
+     zedlmsg = 'To exit, press F3.',                                            
+               'Temporary help file will be deleted.'                           
+     ispexec "setmsg msg(isrz000)"                                              
+     "view file(temp)"                                                          
+   address /* from ispexec                                        */            
+ end                           /* ISPF ACTIVE                     */            
+ else do                       /* ISPF not ACTIVE                 */            
+   do k = 1 to stdout.0                                                         
+      say stdout.k                                                              
+   end /* do k = 1 to stdout.0                                    */            
+ end                           /* ISPF not ACTIVE                 */            
+                                                                                
+call delete_temp_file                                                           
+                                                                                
+zispfrc = 0                                                                     
+if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'               
+exit zispfrc                                                                    
+/*________________________________________________________________*/            
+/*                                                                */            
+set_env:                                                                        
+                                                                                
+env.0 = 3                                                                       
+env.1 = "PATH=.:/bin:usr/local/bin"                                             
+env.2 = "LC_ALL="lc_all                                                         
+env.3 = "_BPX_SHAREAS=MUST" /* ddname friendly, e.g. cat DD:DD01  */            
+        /* or   awk ... < cat "dd:dd01(mbr1)" > awkout.txt        */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+/*                                                                */            
+check_for_error: procedure expose rexxname bpxwunix_rc stderr. env. temp        
+                                                                                
+  if stderr.0 > 0 then do /* stderr.0 was expected                */            
+     say rexxname": Execution of 'cmd' failed."                                 
+                                                                                
+     do i = 1 to stderr.0                                                       
+        say 'stderr.'i' = 'stderr.i                                             
+     end /* do i = 1 to stderr.0                                  */            
+                                                                                
+     call delete_temp_file                                                      
+                                                                                
+     zispfrc = 16                                                               
+     if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'          
+     exit zispfrc                                                               
+  end /* if stderr.0 > 0, stderr.0 was expected                   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+/*                                                                */            
+delete_temp_file: procedure expose env. temp                                    
+                                                                                
+  drop stderr2.; stderr2.0 = 0                                                  
+  cmd2 = 'rm 'temp /* remove temporary file                       */            
+  call bpxwunix cmd2,,,stderr2.,env.                                            
+     do i = 1 to stderr2.0 /* stderr2.0 is expected               */            
+        say 'stderr2.'i' = 'stderr2.i                                           
+     end /* do i = 1 to stderr2.0                                 */            
+  drop env.                                                                     
+  call syscalls('OFF') /* Is it avoiding SA03 unfinished tasks?   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+                                                                                
+bpxwdyrc: procedure expose last_Bpxwdyn_rc                                      
+numeric digits 12 /* say digits() gives default 9                 */            
+parse arg Bpxwdyn_rc                                                            
+                                                                                
+/*              Check BPXWDYN return code.                        */            
+/*              Says if different of zero.                        */            
+/*              Only update: last_Bpxwdyn_rc                      */            
+                                                                                
+/* Example of call:                                               */            
+                                                                                
+/* Bpxwdyn_rc = bpxwdyn("alloc shr reuse dd("dd1") dsn("dsn1")")  */            
+/*      or                                                        */            
+/* call bpxwdyn "alloc shr reuse dd("dd1") dsn("dsn1")"           */            
+/* Bpxwdyn_rc = result                                            */            
+                                                                                
+/* if Bpxwdyn_rc <> 0 then do                                     */            
+/*    call bpxwdyrc(Bpxwdyn_rc)                                   */            
+/*    exit                                                        */            
+/* end /* if Bpxwdyn_rc <> 0 */                                   */            
+                                                                                
+select                                                                          
+  /* 'when' by decreasing expected order of frequency             */            
+  when Bpxwdyn_rc = 0  then nop /* Success.                       */            
+                                                                                
+  when Bpxwdyn_rc > 20 !, /* Dynamic allocation or output error.  */            
+       (Bpxwdyn_rc >= -2147483648 & Bpxwdyn_rc <= -1610612737) then do          
+       /* >0, or -1610612737 to -2147483648                       */            
+                                                                                
+       say copies('_',22)                                                       
+       say                                                                      
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Dynamic allocation or dynamic output error.'                        
+                                                                                
+       /* Say first time if a series of identical Bpxwdyn_rc.     */            
+       /* Do not intercept uninitialized last_Bpxwdyn_rc          */            
+       signal off novalue                                                       
+       if Bpxwdyn_rc <> last_Bpxwdyn_rc then do                                 
+          last_Bpxwdyn_rc = Bpxwdyn_rc                                          
+          say 'If dynamic allocation:'                                          
+               rc_dec       = Bpxwdyn_rc                                        
+               rc_hex       = d2x(rc_dec,8)  /* 8 characters output */          
+               rc_hex_left  = left(rc_hex,4)                                    
+               rc_hex_right = right(rc_hex,4)                                   
+          say '  Bpxwdyn_rc in decimal:    ' Bpxwdyn_rc                         
+          say '  Bpxwdyn_rc in hexadecimal:' rc_hex                             
+          say '  It separates in two:'                                          
+          say '    dynamic allocation error reason code: 'rc_hex_left '(hex)'   
+          say '    information reason code:              'rc_hex_right '(hex)'  
+          say '  Please check for dynamic allocation error reason code',        
+                 rc_hex_left                                                    
+          say '  in "MVS Programming: Authorized Assembler Services Guide"'     
+          say '                       Interpreting DYNALLOC return codes'       
+          say '  e.g. 0238 corresponds to space unavailable in TIOT.'           
+       end /* first time if a series of identical Bpxwdyn_rc      */            
+       else say "Last previous error was identical."                            
+                                                                                
+  end /* Dynamic allocation or dynamic output error               */            
+                                                                                
+  when Bpxwdyn_rc = 20 then do  /* Invalid parameter list.        */            
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Invalid parameter list.'                                            
+  end /* when Bpxwdyn_rc = 20                                     */            
+                                                                                
+  when Bpxwdyn_rc >= -9999 & Bpxwdyn_rc <= -21 then do                          
+       /* -21 to -9999       Key error                            */            
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Key error in key number 'right(Bpxwdyn_rc,2)-20'.'                  
+  end /* when Bpxwdyn_rc >= -9999 & Bpxwdyn_rc <= -21             */            
+                                                                                
+  when Bpxwdyn_rc >= -10099 & Bpxwdyn_rc <= -10000 then do                      
+       /* -100nn             Message processing error.            */            
+       say 'Bpxwdyn_rc = 'Bpxwdyn_rc                                            
+       say 'Message processing error.'                                          
+       say 'IEFDB476 returned code 'right(Bpxwdyn_rc,2)'.'                      
+  end /* when Bpxwdyn_rc >= -10099 & Bpxwdyn_rc <= -10000         */            
+                                                                                
+  otherwise say 'Unknown Bpxwdyn return code = 'Bpxwdyn_rc                      
+end /* select                                                     */            
+                                                                                
+return                                                                          
+/* ______________________________________________________________ */            

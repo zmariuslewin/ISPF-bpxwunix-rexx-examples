@@ -1,0 +1,26 @@
+/* rexx */                                                                      
+trace o                                                                         
+                                                                                
+char = ' '             /* space EBCDIC                        */                
+string = 'ab c d b f'                                                           
+                                                                                
+char = x2c('20')       /* space ASCII                         */                
+string = 'ab¤c d b¤f'                                                           
+                                                                                
+z = tally_char(char,string)                                                     
+say 'z = 'z                                                                     
+exit                                                                            
+                                                                                
+tally_char: procedure                                                           
+/* returns how many times char in string                      */                
+                                                                                
+char   = arg(1)                                                                 
+string = arg(2)                                                                 
+                                                                                
+/* wo is length of (string without char)                      */                
+/* space(string,0) remove all spaces from string              */                
+if char = ' ' then wo = length(space(string,0))                                 
+/* this translate change blank in '%' and char in blank       */                
+else interpret "wo = length(space(translate(string,'% ',' "char"'),0))"         
+                                                                                
+return length(string) - wo                                                      

@@ -1,0 +1,142 @@
+showhelp:                                                                       
+/* for bpxwunix command codepage:                                 */            
+lc_all = "Fr_FR.IBM-1147"  /* lc_all = "En_US.IBM-1140"           */            
+                                                                                
+/*________________________________________________________________*/            
+                                                                                
+/* Extract help from source and display it.                       */            
+                                                                                
+/* This subroutine is incorporated in the rexx which contain      */            
+/* the first group of lines to display.                           */            
+/* We assume that the group of lines to display in the calling    */            
+/* rexx has its first line containing the string 'Help starts'    */            
+/* and its last line containing the string 'Help ends'            */            
+/* The subroutine is placed after the group of lines to display.  */            
+/* It is called by: call showhelp and it does not return.         */            
+/* Example:                                                       */            
+/* /* rexx                                */                      */            
+/* /* Help starts                         */                      */            
+/* /* This is an example of calling rexx. */                      */            
+/* /* Help ends                           */                      */            
+/* call showhelp                                                  */            
+/* exit                                                           */            
+/* showhelp:                                                      */            
+/* ...                                                            */            
+/* return                                                         */            
+/*________________________________________________________________*/            
+/*                                                                */            
+                                                                                
+parse source . . rexxname rexxddn .     /* rexxname in upper case */            
+                                                                                
+regex1 = 'Help' 'starts'                                                        
+regex2 = 'Help' 'ends'                                                          
+/* -n:   suppress automatic printing                              */            
+/*  p:   print                                                    */            
+/*  Print only between lines with regex1 included and             */            
+/*  lines with regex2 included.                                   */            
+sed = "sed -n '/"regex1"/,/"regex2"/p'" /* sed -n '/A/,/B/p'      */            
+/*  Stop when first regex2 met.                                   */            
+/*  q: quit                                                       */            
+sed = "sed -n -e '/"regex1"/,/"regex2"/p'",                                     
+             "-e '/"regex2"/q'"                                                 
+                                                                                
+temp = '/tmp/temp'random(1,99999)  /* temporary file              */            
+                                                                                
+call set_env /* z/OS Unix environment variables                   */            
+drop stdout.; stdout.0 = 0    /* initialize standard output stem  */            
+drop stderr.; stderr.0 = 0    /* initialize standard error stem   */            
+if rexxddn = '?' ! rexxname = '?' then do /* use sourceline       */            
+                                                                                
+  /* Copy content of presently edited file into stem line.        */            
+  trace_previous = trace("o") /* no trace                         */            
+  drop line.                                                                    
+  do i = 1 to sourceline()                                                      
+     line.i = sourceline(i)                                                     
+  end /* do i = 1 to sourceline()                                 */            
+  line.0 = sourceline()                                                         
+  trace(trace_previous)                                                         
+                                                                                
+  /* cmd = 'cat | 'sed' > 'temp                              Ok   */            
+  cmd = 'cat | 'sed' | tee 'temp /* write on stdout. and temp     */            
+  call bpxwunix cmd,line.,stdout.,stderr.,env.                                  
+  bpxwunix_rc = rc                                                              
+end /* if rexxddn = '?' ! rexxname = '?'     use sourceline       */            
+else do /* use rexxddn and rexxname                               */            
+  /*    sed ... < cat "dd:dd1(mbr1)" > temp               syntax  */            
+  /* cmd = sed' < cat "dd:'rexxddn'('rexxname')" > 'temp     Ok   */            
+  /* tee writes on standard output and file temp.                 */            
+  /* stdout. is used if ISPF not active.                          */            
+  cmd = sed' < cat "dd:'rexxddn'('rexxname')" | tee 'temp                       
+  rc = bpxwunix(cmd,,stdout.,stderr.,env.)                                      
+  bpxwunix_rc = rc                                                              
+end /*     use rexxddn and rexxname                               */            
+                                                                                
+call check_for_error                                                            
+drop line. stderr.                                                              
+                                                                                
+if sysvar(sysispf) = 'ACTIVE' then do /* ISPF ACTIVE              */            
+   address ispexec                                                              
+     "control errors return"                                                    
+     zedsmsg = 'F3 to exit'  /* top right corner                  */            
+     zedlmsg = 'To exit, press F3.',                                            
+               'Temporary help file will be deleted.'                           
+     ispexec "setmsg msg(isrz000)"                                              
+     "view file(temp)"                                                          
+   address /* from ispexec                                        */            
+ end                           /* ISPF ACTIVE                     */            
+ else do                       /* ISPF not ACTIVE                 */            
+   do k = 1 to stdout.0                                                         
+      say stdout.k                                                              
+   end /* do k = 1 to stdout.0                                    */            
+ end                           /* ISPF not ACTIVE                 */            
+                                                                                
+call delete_temp_file                                                           
+                                                                                
+zispfrc = 0                                                                     
+if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'               
+exit zispfrc                                                                    
+/*________________________________________________________________*/            
+/*                                                                */            
+set_env:                                                                        
+                                                                                
+env.0 = 3                                                                       
+env.1 = "PATH=.:/bin:usr/local/bin"                                             
+env.2 = "LC_ALL="lc_all                                                         
+env.3 = "_BPX_SHAREAS=MUST" /* ddname friendly, e.g. cat DD:DD01  */            
+        /*  cat "dd:dd01(mbr1)"                                   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+/*                                                                */            
+check_for_error: procedure expose rexxname bpxwunix_rc stderr. env. temp        
+                                                                                
+  if stderr.0 > 0 then do /* stderr.0 was expected                */            
+     say rexxname": Execution of 'cmd' failed."                                 
+                                                                                
+     do i = 1 to stderr.0                                                       
+        say 'stderr.'i' = 'stderr.i                                             
+     end /* do i = 1 to stderr.0                                  */            
+                                                                                
+     call delete_temp_file                                                      
+                                                                                
+     zispfrc = 16                                                               
+     if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'          
+     exit zispfrc                                                               
+  end /* if stderr.0 > 0, stderr.0 was expected                   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            
+/*                                                                */            
+delete_temp_file: procedure expose env. temp                                    
+                                                                                
+  drop stderr2.; stderr2.0 = 0                                                  
+  cmd2 = 'rm 'temp /* remove temporary file                       */            
+  call bpxwunix cmd2,,,stderr2.,env.                                            
+     do i = 1 to stderr2.0 /* stderr2.0 is expected               */            
+        say 'stderr2.'i' = 'stderr2.i                                           
+     end /* do i = 1 to stderr2.0                                 */            
+  drop env.                                                                     
+  call syscalls('OFF') /* Is it avoiding SA03 unfinished tasks?   */            
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            

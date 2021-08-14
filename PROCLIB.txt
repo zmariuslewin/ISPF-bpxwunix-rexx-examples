@@ -1,0 +1,139 @@
+  /* rexx */                                                                    
+  trace o                                                                       
+                                                                                
+  parse arg group_dsn_by . /* optional: number of datasets to      */           
+                           /* allocate per ddname.                 */           
+  group_dsn_by_default = 16                                                     
+  if group_dsn_by = '' then group_dsn_by = group_dsn_by_default                 
+  else if datatype(group_dsn_by) <> 'NUM' then /* not a number     */           
+                            group_dsn_by = group_dsn_by_default                 
+  /* ISPF limits member list to the first 16 datasets allocated    */           
+  /* to a ddname.                                                  */           
+  /* group_dsn_by = 100 will allocate 100 datasets per ddname      */           
+  /* group_dsn_by = 1   one dataset per ddname                     */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Comments:                                                                  
+  say "PROCLIB datasets in ISRDDN format.                     "                 
+  say "They are shown, by default, by groups of 16 to permit  "                 
+  say "V before ddname then Command ===> SRCHFOR ...          "                 
+  say "to search in a group of 16 datasets.                   "                 
+  say "Example of call:                                       "                 
+  say "Command ===> tso proclib     /* 16  datasets per ddname     */           
+  say "Command ===> tso proclib 100 /* 100 datasets per ddname     */           
+  say "Command ===> tso proclib 1   /* 1   dataset  per ddname     */           
+    _______________________________________________________________*/           
+                                                                                
+  /* Set up command                                                */           
+                                                                                
+  command = '$d proclib'                                                        
+  drop c.                                                                       
+  c.0 = 1                                                                       
+  c.1 = left(command,80)                                                        
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Execute command.                                              */           
+  /* Result in isfulog. stem                                       */           
+                                                                                
+  rc = isfcalls("on")                    /* access = on            */           
+  isfcons = "sdsf"random()               /* console = sdsfxxx      */           
+  isfdelay = 1 /* Wait 1 second before retrieving results          */           
+  address sdsf isfslash "("c.") (wait)"                                         
+  xrc = rc                               /* save return code       */           
+  rc = isfcalls("off")                   /* access = off           */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* If error, display command and error code.                     */           
+  /*                                                               */           
+                                                                                
+  if xrc > 0 then do                                                            
+     say "execution of "                                                        
+     do i = 1 to c.0                                                            
+        say '  'c.i                                                             
+     end /* do i = 1 to c.0                                        */           
+     say "gave code "xrc                                                        
+     zispfrc = 16                                                               
+     if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'          
+     exit zispfrc                                                               
+  end /* if xrc > 0                                                */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* If Ok, build list of PROCLIB dataset names,                   */           
+  /* called entries.                                               */           
+                                                                                
+  entries = '' /* fully qualified quoted dataset name list         */           
+                                                                                
+  max = isfulog.0          /* number of output lines               */           
+  /* Extract dsname from each line with 'DSNAME=' and add          */           
+  /* dsname continuation if following line does not contain        */           
+  /* 'DSNAME='.                                                    */           
+  do i  = 1 to  max                                                             
+     line = isfulog.i                                                           
+     p = pos('DSNAME=',line)                                                    
+     if p > 0 then do /* 'DSNAME='  string present                 */           
+                                                                                
+        /* Extract beginning of dsname.                            */           
+        /* It is the entire dsname if next line is not             */           
+        /* a continuation line.                                    */           
+        head = substr(line,p+7) /* after 'DSNAME='                 */           
+        head = translate(head,'  ','),') /* remove ),              */           
+        head = strip(head)           /* remove blanks              */           
+        /* Add ending quote in case there is no continuation.      */           
+        entries = entries" '"head"'"                                            
+                                                                                
+        /* check next line for continuation (no 'DSNAME=' present) */           
+        if  i = max then leave                                                  
+        k = i + 1                /* next line number               */           
+        line = isfulog.k         /* next line                      */           
+        p = pos('DSNAME=',line)                                                 
+        if p > 0 then iterate    /* 'DSNAME=' present in next line */           
+                                                                                
+        /* extract continuation (no string 'DSNAME=' present)      */           
+        tail = word(line,words(line)) /* last word                 */           
+        tail = translate(tail,'  ','),') /* remove ),              */           
+        tail = strip(tail)           /* remove blanks              */           
+        /* Remove previous ending quote,                           */           
+        /* add tail and ending quote.                              */           
+        len = length(entries)                                                   
+        entries = substr(entries,1,len-1)!!tail"'"                              
+        i = k                        /* current line               */           
+        /* end of extract continuation                             */           
+                                                                                
+     end /* if p > 0     'DSNAME='  present                        */           
+  end /* do i = 1 to max                                           */           
+  entries = strip(entries)                                                      
+  /* say 'entries = 'entries   <- debug                            */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Call isrddn with parameter: only (substring of ddname)        */           
+                                                                                
+   /* Allocate by group of 16 datasets to use VIEW and SRCHFOR     */           
+   /* (ISPF constraint).                                           */           
+   m = length(words(entries)) /* used in building ddnames,         */           
+   /* m is number of digits of number of datasets                  */           
+   ent = subword(entries,1,group_dsn_by) /* first 16 dsnames       */           
+   do n = 1 while words(ent) > 0                                                
+      "alloc shr reuse fi(DUMMY"right(n,m,'0')") da("ent")"                     
+      entries = subword(entries,group_dsn_by + 1) /* rest          */           
+      ent = subword(entries,1,group_dsn_by) /* first 16 of rest    */           
+   end /* do n = 1 while words(ent) > 0                            */           
+   /* At exit, n is (number of ddnames) + 1                        */           
+                                                                                
+   /* Show only ddnames with substring DUMMY.                      */           
+   shlon = 'lon' /* SHort or LONg                                  */           
+   if group_dsn_by = 1 then shlon = 'sh' /* SHort                  */           
+   address tso "isrddn only DUMMY;"shlon";cou;",   /*  count executed */        
+               "m *AB*  dup v+srchfor help"        /* <- not executed */        
+   /* address tso "isrddn only PROCLIB;long;dup"      <- Ok           */        
+                                                                                
+   do i = 1 to n-1                                                              
+      "free fi(DUMMY"right(i,m,'0')")"                                          
+   end /* do i = 1 to n-1                                          */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Normal exit.                                                  */           
+                                                                                
+  zispfrc = 0                                                                   
+  if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'             
+  exit zispfrc                                                                  
+  /*_______________________________________________________________*/           

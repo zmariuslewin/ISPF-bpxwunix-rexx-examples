@@ -1,0 +1,30 @@
+_______________________________________________________________________________ 
+Note on codepages used.                                                         
+_______________________________________________________________________________ 
+z/OS rexx execs use only codepage 037 worldwide.                                
+The rexx execs were written in codepage 037 and could be used                   
+anywhere without conversion.                                                    
+Reference: https://en.wikipedia.org/wiki/EBCDIC_037                             
+The US codepage IBM-1140 differs from the IBM-037 codepage                      
+by only the Euro currency sign.                                                 
+_______________________________________________________________________________ 
+JCL is written in French EBCDIC IBM-1147 codepage.                              
+Minor modifications should be necessary to convert in                           
+US EBCDIC IBM-1140 codepage.                                                    
+Reference: https://en.wikipedia.org/wiki/EBCDIC_297                             
+The French codepage IBM-1147 differs from the IBM-297 codepage                  
+by only the Euro currency sign.                                                 
+_______________________________________________________________________________ 
+The MVS to z/OS Unix bpxwunix expects commands in codepage IBM-1047,            
+unless the environment variable LC_ALL is used.                                 
+Thus, setting up an environment variable                                        
+LC_ALL=Fr_FR.IBM-1147                                                           
+permits to write the expected command not in IBM-1047 but in French             
+EBCDIC codepage IBM-1147.                                                       
+If in a rexx exec, the environnement variable LC_ALL is set, there is           
+no need for further change and the code should execute unless                   
+the user is entering Unix commands written in a different codepage.             
+In this case, LC_ALL environment variable has to be changed and                 
+Unix commands already written in the rexx have to be checked                    
+if they need to be changed.                                                     
+_______________________________________________________________________________ 

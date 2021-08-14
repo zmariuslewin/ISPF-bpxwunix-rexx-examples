@@ -1,0 +1,357 @@
+heredoc:                                                                        
+/* Inline procedure which is added to an existing rexx.           */            
+/* When heredoc is called, it picks up the content                */            
+/* of the next rexx comment following its call and                */            
+/* returns it and, on request, makes the content of               */            
+/* the comment a stem or puts it in a new stack.                  */            
+/*                                                                */            
+/* It may have from 0 to 3 parameters, in any order.              */            
+/* Examples:                                                      */            
+/* string = heredoc()                                             */            
+/* string = heredoc(2)                                            */            
+/* string = heredoc("stem1.")                                     */            
+/* string = heredoc("stack")                                      */            
+/* string = heredoc("stack","stem.1",2)                           */            
+/* string = heredoc(2,"stem.1","stack")                           */            
+/* /* comment being processed /* sub-comment */ */                */            
+                                                                                
+/* The inline procedure heredoc always return a string made of    */            
+/* the content of the first comment following the call to         */            
+/* the procedure.                                                 */            
+/* Sub-comments imbedded inside the first comment following       */            
+/* the call are returned if a numeric parameter is used.          */            
+/* For instance heredoc(2) will return the comment and            */            
+/* first level sub-comments (no sub-comment of a sub-comment).    */            
+/* heredoc(3) will return the comment, the first level            */            
+/* and the second level sub-comments (sub-comments of             */            
+/* a first level sub-comment).                                    */            
+/* heredoc(2) is useful when the comment contains JCL.            */            
+                                                                                
+/* The string which is returned contains the concatenation of     */            
+/* the different lines making the comment.                        */            
+/* Words are separated by only one blank.                         */            
+/* E.g.:    string = heredoc()                                    */            
+/*          /* line 1  /* sub-comment 1 */                        */            
+/*             line 2 */                                          */            
+/* string contains: 'line 1 line 2'                               */            
+/*          string = heredoc(2)                                   */            
+/*          /* line 1  /* sub-comment 1 */                        */            
+/*             line 2 */                                          */            
+/* string contains: 'line 1 /* sub-comment 1 */ line 2'           */            
+                                                                                
+/* The comment may begin on the same line as the call to heredoc  */            
+/* E.g.:                                                          */            
+/*  interpret heredoc() /* say "Hello" */    says "Hello"         */            
+/* The comment may be several lines after the call to heredoc.    */            
+                                                                                
+/* If the parameter 'STACK' is included, it also queues into      */            
+/* a new stack the lines of the first following comment           */            
+/* after its call.                                                */            
+/* E.g.:    string = heredoc('STACK')                             */            
+/*          /* line 1                                             */            
+/*             line 2 */                                          */            
+/* The two lines, line 1 and line 2 are queued separetely         */            
+/* to a new stack.                                                */            
+/* A line made entirely of spaces, is not included.               */            
+/* Another example:                                               */            
+/* call heredoc "stack",2                                         */            
+/* call bpxwunix '/bin/submit','STACK',out.,err.                  */            
+/* "delstack"    ("newstack" introduced by heredoc)               */            
+/* /*                                                                           
+   //BOZO JOB ,CLASS=D,MSGCLASS=S,NOTIFY=&SYSUID,USER=&SYSUID                   
+   //* JCL comment and rexx sub-comment */                                      
+   //IEFBR14 EXEC PGM=IEFBR14,PARM='<°(((><'                                    
+   ///                                                                          
+   */                                                             */            
+                                                                                
+/* If a stem names is among the parameters, it also writes into   */            
+/* the stem, the lines of the first following comment             */            
+/* after its call.                                                */            
+/* E.g.:    string = heredoc('cmd.')                              */            
+/*          /* line 1                                             */            
+/*             line 2 */                                          */            
+/* cmd.0 contains 2.                                              */            
+/* cmd.1 contains line1.                                          */            
+/* cmd.2 contains line2.                                          */            
+/* Empty comment lines are not written to the stem.               */            
+                                                                                
+/* One level variable substitution is supported by indicating     */            
+/* delimiters in a comment.                                       */            
+/* left delimiter delim1: 'value('                                */            
+/* right delimiter delim2: ')'                                    */            
+/* value( ), in this context, is just an indicator for substitution.*/          
+/* To substitute variable dsn by its value, we write value(dsn)   */            
+/* inside a comment.                                              */            
+/* delimiters delim1 and delim2 are case unsensitive.             */            
+                                                                                
+/* Other examples:                                                */            
+/* Example 1:                                                     */            
+/* cmd = heredoc() /* cat "//'BOZO.DOG'" */                       */            
+/* cmd will contain: cat "//'BOZO.DOG'"                           */            
+/* Example 2:                                                     */            
+/* cmd = heredoc() /* cat    "//'BOZO.DOG'"   /* z/OS Unix */ */  */            
+/* cmd will contain: cat "//'BOZO.DOG'"                           */            
+/* Example 3 with substitution:                                   */            
+/* dsn = "BOZO.DOG"                                               */            
+/* cmd = heredoc() /* cat    "//'value(dsn)'"  /* z/OS Unix */ */ */            
+/* cmd will contain: cat "//'BOZO.DOG'"                           */            
+/* Example 4:                                                     */            
+/* cmd = heredoc(2) /* cat    "//'BOZO.DOG'"  /* z/OS Unix */ */  */            
+/* cmd will contain: cat "//'BOZO.DOG'" /* z/OS Unix */           */            
+/* Example 5 (library member processed by awk):                   */            
+/* cmd = heredoc()               /* awk                           */            
+/*     'sub("$","çx0D")' /* add EBCDIC CR at end of record */     */            
+/*     < cat "dd:dd01(mbr1)" > awk.txt    */                      */            
+                                                                                
+/* Unix uses Here documents.                                      */            
+/* https:en.wikipedia.org/wiki/Here_document                      */            
+/* The rexx was named from Here document.                         */            
+/* It may be useful when using the interface to Unix,             */            
+/* bpxwunix when its command contains both apostrophes and double */            
+/* quotes or its standard input is from STACK or from a stem.     */            
+                                                                                
+/* maxlevel is the maximum level of imbedded sub-comments which   */            
+/* will be extracted.                                             */            
+maxlevel = 1            /* default value (no sub-comment)         */            
+process_stack = "no"    /* default value (no "newstack")          */            
+process_stem  = "no"    /* default value                          */            
+                                                                                
+do i = 1 to arg()  /* arguments separated by commas               */            
+   argu = strip(arg(i))                                                         
+   select                                                                       
+     when datatype(argu) = 'NUM'    then maxlevel = arg(i)                      
+     when 'STACK' = translate(argu) then process_stack = "yes"                  
+     when right(argu,1) = '.'       then                                        
+          if datatype(left(argu,length(argu)-1)) <> 'NUM' then do               
+             process_stem = "yes"                                               
+             stem_name = argu                                                   
+          end                                                                   
+     otherwise nop                                                              
+   end /* select                                                  */            
+end /* do i = 1 to arg()                                          */            
+                                                                                
+hold_i = i                                                                      
+i = sigl /* line number of the call to heredoc(...)               */            
+         /* sigl modified by call.                                */            
+         /* instruction i = sigl must be placed before a call.    */            
+         /* sigl not provided to an external procedure,           */            
+         /* (heredoc must be inline).                             */            
+                                                                                
+/* Save variables.                                                */            
+zzz1 = "li k p auxi level m j n2 n"                                             
+call push(zzz1)                                                                 
+                                                                                
+/* i is the number of the line containing 'heredoc'               */            
+/* (case unsensitive)                                             */            
+/* li is the line being currently examined                        */            
+li  = sourceline(i)                                                             
+li  = substr(li,pos('HEREDOC',translate(li)))                                   
+/* li starts at 'HEREDOC' (case unsensitive)                      */            
+                                                                                
+slashaster = '/'!!'*'                                                           
+asterslash = '*'!!'/'                                                           
+                                                                                
+/* search for first slashaster                                    */            
+do k = i to sourceline()                                                        
+   if k > i then li = sourceline(k)                                             
+   p = pos(slashaster,li)                                                       
+   if p > 0 then do /* first slashaster found                     */            
+      li = substr(li,p)  /* starts at slashaster                  */            
+      leave                                                                     
+   end /* if p > 0         first slashaster found                 */            
+end /* do k = i to sourceline()                                   */            
+/* k is the line number of the line with the first slashaster     */            
+/* after 'heredoc' (case unsensitive)                             */            
+/* k may be equal to i                                            */            
+/* li begins by slashaster.                                       */            
+                                                                                
+/* level is comment embedding level.                              */            
+/* level increases by 1 with slashaster                           */            
+/* and decreases by 1 with asterslash.                            */            
+/* We stop when asterslash found causes                           */            
+/* level to decrease to zero.                                     */            
+/* We collect by default characters when level = 1 but not        */            
+/* when level > 1 (comment imbedded in another                    */            
+/* comment).                                                      */            
+li = substr(li,3) /* past first slashaster                        */            
+                                                                                
+/* auxiliary stem aux. with comment lines                         */            
+drop aux.                                                                       
+aux.0 = 0                                                                       
+auxi  = 0   /* counter for aux.                                   */            
+                                                                                
+level = 1                                                                       
+/* All characters inside a comment without sub_comment are at     */            
+/* level 1.                                                       */            
+do m = k to sourceline()                                                        
+   if m > k then li = sourceline(m)                                             
+                                                                                
+   auxi = auxi + 1; aux.auxi = ''                                               
+   /* scan li                                                     */            
+   do j = 1 to length(li)                                                       
+      /* process one or two characters                            */            
+      if j < length(li) then                                                    
+         select                                                                 
+           when substr(li,j,2) = slashaster then do                             
+                level = level + 1                                               
+                if level <= maxlevel then                                       
+                            aux.auxi  = aux.auxi!!slashaster                    
+                j = j + 1                                                       
+                iterate j                                                       
+           end /* when substr(li,j,2) = slashaster                */            
+           when substr(li,j,2) = asterslash then do                             
+                level = level - 1                                               
+                if level = 0 then leave m /* scan ended           */            
+                if level < maxlevel then                                        
+                           aux.auxi  = aux.auxi!!asterslash                     
+                j = j + 1                                                       
+                iterate j                                                       
+           end /* when substr(li,j,2) = asterslash                */            
+           otherwise                                                            
+             if level <= maxlevel then /* add one character       */            
+                         aux.auxi = aux.auxi!!substr(li,j,1)                    
+          end /* select                                           */            
+     else /* j = length(li)                                       */            
+       if level <= maxlevel then aux.auxi = aux.auxi!!substr(li,j,1)            
+   end /* do j = 1 to length(li)                                  */            
+end /* do m = k to sourceline()                                   */            
+aux.0 = auxi                                                                    
+                                                                                
+concat = '' /* string returned                                    */            
+n2 = 0 /* n2 parameter stem_name index                            */            
+do n = 1 to aux.0                                                               
+   concat = concat aux.n /* substitution in concat later          */            
+   /* substitution line per line                                  */            
+   aux.n = substitute_values(aux.n)                                             
+   /* if parameter STACK present then queue                       */            
+   /* non empty lines to stack created earlier by call push       */            
+   if process_stack = "yes" then                                                
+      if strip(aux.n) <> '' then queue aux.n                                    
+   if process_stem = "yes" then                                                 
+      if strip(aux.n) <> '' then do                                             
+         n2 = n2 + 1                                                            
+         interpret stem_name!!n2 "= aux.n"                                      
+         end                                                                    
+end /* do n = 1 to aux.0                                          */            
+if process_stem = "yes" then                                                    
+   interpret stem_name!!'0' "= n2"                                              
+/* global substitution for string to be returned                  */            
+concat = substitute_values(concat)                                              
+                                                                                
+/* restore variables                                              */            
+if process_stack = "yes" then call pop zzz1,"nodelstack"                        
+                         else call pop zzz1                                     
+i = hold_i                                                                      
+                                                                                
+return space(concat) /* n spaces -> one space , strip implied     */            
+/*________________________________________________________________*/            
+                                                                                
+substitute_values:                                                              
+parse arg string                                                                
+                                                                                
+/* Substitute values for variables with name surrounded           */            
+/* by delimiter delim1 and delimiter delim2 in string.            */            
+                                                                                
+/* For instance:                                                  */            
+/*  Before:                                                       */            
+/*  mbr = "MBR1"; file = '/tmp/temp'random(99999)                 */            
+/*  string = 'cat "dd:dd01(value(mbr))" > value(file)'            */            
+/*  string = substitute_values(string)                            */            
+/*  After (possibly):                                             */            
+/*  string = 'cat "dd:dd01(MBR1)" > /tmp/temp21435'               */            
+                                                                                
+/* Save variables.                                                */            
+zzz2 = "delim1 delim2 l_delim1 l_delim2",                                       
+       "p q head rest item tail"                                                
+call push(zzz2)                                                                 
+                                                                                
+delim1 = 'value('  /* default value                               */            
+delim2 = ')'       /* default value                               */            
+/* Case unsensitive delimiters:                                   */            
+/* 'Value(' may be used instead of 'value('                       */            
+                                                                                
+l_delim1 = length(delim1)                                                       
+l_delim2 = length(delim2)                                                       
+                                                                                
+p = pos(translate(delim1),translate(string))                                    
+do while p > 0                                                                  
+   head = substr(string,1,p-1)      /* before delim1              */            
+   rest = substr(string,p+l_delim1) /* after  delim1              */            
+   q = pos(translate(delim2),translate(rest))                                   
+   if q = 0 then leave /* delim1 without delim2                   */            
+   item = substr(rest,1,q-1)                                                    
+   tail = substr(rest,q+l_delim2) /* past delim2                  */            
+                                                                                
+   string = head!!value(item)!!tail                                             
+                                                                                
+   p = pos(translate(delim1),translate(string))                                 
+end /* do while pos(translate(delim1),translate(string)) > 0      */            
+                                                                                
+call pop(zzz2) /* restore variables                               */            
+                                                                                
+return string                                                                   
+/*________________________________________________________________*/            
+push:                                                                           
+                                                                                
+/* Push name and previous value of variables                      */            
+/* in a list of variables.                                        */            
+zzz = arg(1)                                                                    
+if arg() >= 2 then extra = arg(2)                                               
+              else extra = ''                                                   
+                                                                                
+/* zzz contains a list of variables.                              */            
+/* extra may contain "nonewstack"                                 */            
+                                                                                
+/* Example of call:                                               */            
+/* zzz2 = "var1 var2 var3"                                        */            
+/* call push(zzz2)    /* "newstack" implied */                    */            
+/* call push zzz2,"nonewstack"                                    */            
+                                                                                
+if translate(extra) <> "NONEWSTACK" then "newstack"                             
+                                                                                
+do zzzi = 1 to words(zzz)                                                       
+   /*   name of the variable for future check and                 */            
+   /*   value of the variable                                     */            
+   push word(zzz,zzzi) value(word(zzz,zzzi))                                    
+end                                                                             
+return                                                                          
+/*________________________________________________________________*/            
+pop:                                                                            
+                                                                                
+/* Pop previous values of variables.                              */            
+zzz = arg(1)                                                                    
+if arg() >= 2 then extra = arg(2)                                               
+              else extra = ''                                                   
+                                                                                
+/* zzz contains the list of variables which were pushed           */            
+/* into stack.                                                    */            
+/* extra may contain "nodelstack"                                 */            
+                                                                                
+                                                                                
+/* Example of call:                                               */            
+/* zzz2 = "var1 var2 var3"                                        */            
+/* call pop(zzz2)   /* "delstack" implied */                      */            
+/* call pop zzz2,"nodelstack"                                     */            
+                                                                                
+do zzzi = words(zzz) to 1 by -1                                                 
+   parse pull zzzv /* should be: variable name and value          */            
+   /* check if first word of parse pulled record is the           */            
+   /* same as variable name.                                      */            
+   if word(zzzv,1) = word(zzz,zzzi) then                                        
+      /* set value of variable word(zzz,zzzi) to subword(zzzv,2)  */            
+      /* dot is for first word                                    */            
+      interpret "parse var zzzv ." word(zzz,zzzi)                               
+   else do /* error retrieving previous value                     */            
+     say 'Error retrieving previous value of variable 'word(zzz,zzzi)           
+     say 'The content of pulled record is (between > and <) :'                  
+     say '>'zzzv'<'                                                             
+     say 'The first word 'word(zzzv,1)' of pulled record should',               
+         'have been variable name 'word(zzz,zzzi)'.'                            
+     say 'We stop retrieving previous values but we continue.'                  
+     leave                                                                      
+   end /* error retrieving previous value                         */            
+end                                                                             
+if translate(extra) <> "NODELSTACK" then "delstack"                             
+                                                                                
+return                                                                          
+/*________________________________________________________________*/            

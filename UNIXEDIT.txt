@@ -1,0 +1,451 @@
+//UNIXEDIT PROC DSNIN=&DSNIN,DSNOUT=&DSNOUT,                                    
+//         LCALL='En_US.IBM-1140' user codepage                                 
+//*        LCALL='Fr_FR.IBM-1147' in France                                     
+//*                                                                             
+//* Terminal codepage may be determined by executing a rexx. Example:           
+//* ****** ********************************* Top of Data ******************     
+//* 000001 /* rexx */ address ispexec 'vget ztermcp5 shared'; say ztermcp5      
+//* ****** ******************************** Bottom of Data ****************     
+//*_____________________________________________________________________        
+//* Edition of members of a library with z/OS Unix commands.                    
+//*                                                                             
+//*  DSNIN is the input library.                                                
+//*  DSNOUT is the output library.                                              
+//*  If DSNOUT=DUMMY or DSNOUT=NULLFILE, we do not write                        
+//*     to an output LIBRARY.                                                   
+//*  Standard output is copied to the SYSTSPRT file.                            
+//*  If (DSNOUT= with nothing at right of the equal sign                        
+//*     or is not present)                                                      
+//*  and DSNIN was specified with a library name,                               
+//*     then an output library with name, the input library                     
+//*     name suffixed by '.OUT' is created, or, if it exists,                   
+//*     its members will be replaced.                                           
+//*  If DSNOUT is specified with a dataset name,                                
+//*     (e.g. DSNOUT=BOZO.PDSE.OUTPUT)                                          
+//*     the output dataset, if it does not exist, is created,                   
+//*     otherwise, its members will be replaced.                                
+//*                                                                             
+//*  //    SET DSNIN=BOZO.CNTL                                                  
+//*  //    SET DSNOUT=BOZO.CNTLOUT                                              
+//*  //    EXEC UNIXEDIT                                                        
+//*     is the same as                                                          
+//*  //    EXEC UNIXEDIT,DSNIN=BOZO.CNTL,DSNOUT=BOZO.CNTLOUT                    
+//*                                                                             
+//*  Structure of the rexx executed in this procedure:                          
+//*                                                                             
+//*  1) We copy the input library into a temporary z/OS Unix                    
+//*     directory.                                                              
+//*  2) With commands in the //BEGIN file, the user may process                 
+//*     the copied members or issue other z/OS Unix commands.                   
+//*     (//SYSIN may be used instead of //BEGIN).                               
+//*  3) We set up a   for mbr in *; do ... ; done   loop.                       
+//*     THe user may include z/OS Unix commands in the                          
+//*     file //THIS$MBR. These commands replace the three dots                  
+//*     in   "for mbr in *; do ... ; done"                                      
+//*     The name of the member operated upon is $mbr.                           
+//*     Example of commands replacing the three dots:                           
+//*     echo "Member $mbr"                                                      
+//*     head -n5 $mbr                                                           
+//*  4) With commands in the //END file, the user may process                   
+//*     the members in the temporary directory or issue                         
+//*     other z/OS Unix commands.                                               
+//*  5) We copy with replacement all members still present                      
+//*     in the temprorary directory to the output library.                      
+//*                                                                             
+//*  Examples:                                                                  
+//* ________________________________________________________                    
+//*   Create or replace BOZO.CNTL.OUT                                           
+//*   (No backout copy of BOZO.CNTL.OUT, if it exists.                          
+//*   May be used first to check out)                                           
+//*   //    EXEC UNIXEDIT,DSIN=BOZO.CNTL                                        
+//*   followed by control cards                                                 
+//*                                                                             
+//*   Create or replace BOZO.CNTL2                                              
+//*   (No backout copy of BOZO.CNTL2, if it exists)                             
+//*   //    EXEC UNIXEDIT,DSIN=BOZO.CNTL,DSNOUT=BOZO.CNTL2                      
+//*   followed by control cards                                                 
+//*                                                                             
+//*   Create or replace members in BOZO.CNTL                                    
+//*   (No backout copy)                                                         
+//*   //    EXEC UNIXEDIT,DSIN=BOZO.CNTL,DSNOUT=BOZO.CNTL                       
+//*   followed by control cards                                                 
+//* ________________________________________________________                    
+//*   Replace in all members of a library,                                      
+//*   in all lines containing 'HERE', 'BEFORE' by 'AFTER '                      
+//*   //    EXEC UNIXEDIT,DSIN=BOZO.CNTL,DSNOUT=BOZO.CNTL                       
+//*   //BEGIN DD *                                                              
+//*   ls -al                                                                    
+//*   //THIS$MBR DD *                                                           
+//*   sed '/HERE/s/BEFORE/AFTER /g' $mbr > $mbr".txt"                           
+//*   mv $mbr".txt" $mbr                                                        
+//*   //END DD *                                                                
+//*   pwd                                                                       
+//* ________________________________________________________                    
+//*   Convert all members of a library to UTF-8 before                          
+//*   unloading them in binary to Windows.                                      
+//*                                                                             
+//*   //    EXEC UNIXEDIT,DSNIN=BOZO.PDSE,DSNOUT=NULLFILE                       
+//*   //BEGIN DD *                                                              
+//*   mydir="/u/bozo/mydir"                                                     
+//*   rm -r $mydir                                                              
+//*   mkdir $mydir                                                              
+//*   //THIS$MBR DD *                                                           
+//*   awk 'sub("$", "çr")'   $mbr       > $mbr".txt"                            
+//*   iconv -f 1140 -t utf-8 $mbr".txt" > $mydir"/"$mbr                         
+//*   //*                                                                       
+//*   //* awk substitute to the null character before end of line,              
+//*   //* a carriage return CR. End of line for Windows is CRLF (0x0D0A).       
+//*   //* 1140 for IBM-1140 (US EBCDIC codepage)                                
+//* ________________________________________________________                    
+//*   Make a sequential file with each member preceded by a header              
+//*   ./ADD NAME which may be used as input to the IEBUPDTE utility.            
+//*   //    EXPORT SYMLIST=*                                                    
+//*   //    SET DSNIN=BOZO.CNTL         input library                           
+//*   //    SET FLAT=&DSNIN..FLAT  Add .FLAT at end of name, output             
+//*   //    EXEC DELDEF,DSN=&FLAT  Allocate output sequential file              
+//*   //*                                                                       
+//*   //    EXEC UNIXEDIT,DSNIN=&DSNIN,DSNOUT=NULLFILE                          
+//*   //BEGIN DD *,SYMBOLS=EXECSYS                                              
+//*   awk 'FNR==1éprint "./ADD NAME="FILENAMEè;1' * > flat                      
+//*   cp flat "//'&FLAT'"                                                       
+//*   //*                                                                       
+//*   //* * all members                                                         
+//*   //* FNR==1 at first record of each member                                 
+//*   //* 1 true, print current record                                          
+//*   //* Only output is &FLAT sequential MVS file                              
+//*                                                                             
+//*   Alternative:                                                              
+//*   //    EXEC UNIXEDIT,DSNIN=&DSNIN,DSNOUT=NULLFILE                          
+//*   //THIS$MBR DD *                                                           
+//*   (echo "./ADD NAME="$mbr; cat $mbr) >> flat                                
+//*   //END DD *,SYMBOLS=EXECSYS                                                
+//*   cp flat "//'&FLAT'"                                                       
+//* ________________________________________________________                    
+//*   Create or replace member DIR in default output                            
+//*   library &DSNIN..OUT (as DSNOUT=).                                         
+//*   If DSNOUT specifies a library which does not exist,                       
+//*   it will be allocated.                                                     
+//*   Submit all members with name beginning by JOB.                            
+//*   Copy calendar content of missing days september 1752 month                
+//*   to allocated DDOUT file.                                                  
+//*   //    SET DSNIN=BOZO.CNTL         input library                           
+//*   //*                                                                       
+//*   //    EXEC UNIXEDIT,DSNIN=&DSNIN,DSNOUT=                                  
+//*   ls -al > DIR                                                              
+//*   submit JOB*                                                               
+//*   £ cp or mv cannot be piped into                                           
+//*   cal sep 1752 > CAL      &&                                                
+//*   cp CAL "//dd:ddout"     &&                                                
+//*   rm CAL                                                                    
+//*   //DDOUT DD SYSOUT=*                                                       
+//* ________________________________________________________                    
+//*   With no imput or outyput library.                                         
+//*   Present working directory is a temporary directory                        
+//*   which will be removed at end of processing.                               
+//*   Implicit //SYSIN DD card same as //BEGIN DD card.                         
+//*   //    EXEC UNIXEDIT                                                       
+//*   cal sep 1752 > CAL      &&                                                
+//*   mv CAL "//dd:ddout"                                                       
+//*   //DDOUT DD SYSOUT=*                                                       
+//*                                                                             
+//*   //    EXEC UNIXEDIT                                                       
+//*   //IN    DD DISP=SHR,DSN=BOZO.SEQ                                          
+//*   //OUT   DD SYSOUT=*                                                       
+//*   cp "//dd:in" in                                                           
+//*   wc in > out                                                               
+//*   cp out "//dd:out"                                                         
+//*                                                                             
+//*   //    EXEC UNIXEDIT                                                       
+//*   £ Obtain machine model with uname. E.g.: 8561 (z15)                       
+//*   echo "Model: $(uname -m)"                                                 
+//*   £                                                                         
+//*   £ Alternative: obtain machine model with MVS display command D M=CPU      
+//*   £ Use _BPX_SHAREAS=YES with tso command                                   
+//*   export _BPX_SHAREAS=YES                                                   
+//*   £ Using a rexx in the SYSEXEC allocation:                                 
+//*   export SYSEXEC="alloc da('BOZO.EXEC') shr reuse"                          
+//*   £ export SYSEXEC=BOZO.EXEC:BOZO.EXEC2     Ok                              
+//*   £ c is a rexx in SYSEXEC allocation which executes a MVS command.         
+//*   £ D M=CPU is the executed command. Confer line with CPC SI for model.     
+//*   tso c d m=cpu                                                             
+//*   £                                                                         
+//*   £ Other example of using the tso command:                                 
+//*   export _BPX_SHAREAS=YES                                                   
+//*   tso    time                                                               
+//*   tso    "ex 'BOZO.EXEC(ABC)'"                                              
+//* ________________________________________________________                    
+//* Other example:                                                              
+//*   //* Copy from PDS RECFM=FB to PDSE RECFM=VB with replacement              
+//*   // EXEC UNIXEDIT,DSNIN=BOZO.PDSFB,DSNOUT=BOZO.PDSEVB                      
+//*   No control cards                                                          
+//* ________________________________________________________                    
+//* Note: Pad with spaces to minimum length len                                 
+//* -     justify left                                                          
+//* len   minimum length                                                        
+//* len=80; awk -v len="$len" 'éprintf "%-"len"sçn", $0è' $mbr > $mbr.txt       
+//* ________________________________________________________                    
+//*                                                                             
+//         EXPORT SYMLIST=*  Insert into SYSTSIN                                
+//         SET QUOTE=''''                                                       
+//         SET P='<'  Place holder in case of empty parameter                   
+//*        Parameters are consecutive in rexx arg(1).                           
+//         SET DSNIN=&QUOTE&P&DSNIN&QUOTE                                       
+//         SET DSNOUT=&QUOTE&P&DSNOUT&QUOTE                                     
+//         SET LCALL=&QUOTE&P&LCALL&QUOTE                                       
+//GO       EXEC PGM=IKJEFT1B,DYNAMNBR=500                                       
+//ISPLOG   DD DSN=&&ISPLOG,UNIT=SYSDA,SPACE=(TRK,(15,15)),                      
+//         LRECL=125,BLKSIZE=129,RECFM=VA                                       
+//ISPPROF  DD DSN=&ISPPROF,DISP=NEW,UNIT=SYSDA,SPACE=(TRK,(15,15,5)),           
+//         RECFM=FB,LRECL=80,BLKSIZE=3120                                       
+//ISPPLIB  DD RECFM=FB,LRECL=80,UNIT=VIO,SPACE=(TRK,(1,0,1))                    
+//ISPMLIB  DD DISP=SHR,DSN=ISP.SISPMENU                                         
+//ISPSLIB  DD RECFM=FB,LRECL=80,UNIT=VIO,SPACE=(TRK,(1,0,1))                    
+//ISPTABL  DD DUMMY                                                             
+//ISPTLIB  DD RECFM=FB,LRECL=80,UNIT=VIO,SPACE=(TRK,(1,0,1))                    
+//         DD DISP=SHR,DSN=ISP.SISPTENU                                         
+//*                                                                             
+//SYSTSIN  DD *,SYMBOLS=EXECSYS                                                 
+profile noprefix                                                                
+ocopy indd(main) outdd(exec)                                                    
+ispstart cmd(%main      +                                                       
+         &dsnin &dsnout +                                                       
+         &lcall )  bdispmax(999999)                                             
+//*                                                                             
+//BEGIN    DD DDNAME=SYSIN                                                      
+//THIS$MBR DD DDNAME=THIS$MBR                                                   
+//END      DD DDNAME=END                                                        
+//*                                                                             
+//SYSTSPRT DD SYSOUT=*,OUTLIM=500000                                            
+//*                                                                             
+//EXEC     DD DSN=&&TEMPPDS(MAIN),UNIT=VIO,SPACE=(TRK,(1,1,1)),                 
+//            RECFM=FB,LRECL=80                                                 
+//SYSEXEC  DD DSN=&&TEMPPDS,VOL=REF=*.EXEC,DISP=(OLD,DELETE)                    
+//MAIN     DD DATA,DLM='><)))°>'                                                
+ /* rexx */                                                                     
+ trace o                                                                        
+                                                                                
+ parse source . . rexxname .    /* rexxname in upper case          */           
+ parse arg dsnin dsnout lc_all .                                                
+ /* Remove first character place holder used in case of empty      */           
+ /* parameter as parameters are obtained consecutively.            */           
+ dsnin  = substr(dsnin,2)                                                       
+ dsnout = substr(dsnout,2)                                                      
+ /* Replace &DSNIN or &DSNOUT by null string.                      */           
+ if left(dsnin,6)  = '&DSNIN'  then dsnin  = substr(dsnin,7)                    
+ if left(dsnout,7) = '&DSNOUT' then dsnout = substr(dsnout,8)                   
+ /* Remove first character place holder.                           */           
+ lc_all = substr(lc_all,2)                                                      
+ /* For bpxwunix command codepage:                                 */           
+ /* lc_all = "Fr_FR.IBM-1147"  lc_all = "En_US.IBM-1140"           */           
+ /* Code of Unix commands inside this rexx are common to French,   */           
+ /* US and z/OS Unix IBM-1047 codepages.                           */           
+ /* Terminal code page used for lc_all may be obtained by          */           
+ /* executing interactively this one-liner rexx:                   */           
+ /* /* rexx */ address ispexec 'vget ztermcp5 shared'; say ztermcp5  */         
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Check input dsname.                                            */           
+ /*________________________________________________________________*/           
+                                                                                
+ dsnin = strip(dsnin,,"'")                 /* remove quotes if any */           
+ if dsnin = '' ! wordpos(translate(dsnin),'DUMMY NULLFILE') > 0                 
+    then dsnin_present = "no"                                                   
+    else dsnin_present = "yes"                                                  
+ if dsnin_present = "yes" then do                                               
+    msg_prev = msg('off')                                                       
+      sysdsn_dsnin = sysdsn("'"dsnin"'")                                        
+    msg_off  = msg(msg_prev)                                                    
+    if sysdsn_dsnin <> 'OK' then do                                             
+       say rexxname": Input dsname "dsnin                                       
+       say '           ' sysdsn_dsnin                                           
+       zispfrc = 16                                                             
+       say 'We exit with code' zispfrc                                          
+       if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'        
+       exit zispfrc                                                             
+    end /* if sysdsn_dsnin <> 'OK'                                 */           
+    udsnin = '"//'''dsnin'''"'                                                  
+ end /* if dsnin_present = "yes"                                   */           
+                                                                                
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Check output dsname.                                           */           
+ /*________________________________________________________________*/           
+                                                                                
+ dsnout = strip(dsnout,,"'")               /* remove quotes if any */           
+ select                                                                         
+   when wordpos(translate(dsnout),'DUMMY NULLFILE') > 0 then                    
+        dsnout_present = "no"                                                   
+   when dsnin_present = "no" & dsnout = '' then                                 
+        dsnout_present = "no"                                                   
+   when dsnin_present = "yes" & dsnout = '' then do                             
+        dsnout = dsnin'.OUT' /* default                            */           
+        dsnout_present = "yes"                                                  
+   end /* when dsnin_present = "yes" & dsnout = ''                 */           
+   otherwise dsnout_present = "yes"                                             
+ end /* select                                                     */           
+                                                                                
+ if dsnout_present = "yes" then do                                              
+    msg_prev = msg('off')                                                       
+      sysdsn_dsnout = sysdsn("'"dsnout"'")                                      
+    msg_off  = msg(msg_prev)                                                    
+    select /* according to sysdsn_dsnout                           */           
+      when sysdsn_dsnout = 'OK' then nop                                        
+      when sysdsn_dsnout = 'DATASET NOT FOUND' then do /* allocate */           
+        if dsnin_present = "yes" then rest = "like('"dsnin"')"                  
+           else rest = "recfm(f b) lrecl(80) blksize(0) tr sp(10 100)"          
+        "alloc f(ddout) da('"dsnout"')  new catalog reuse ucount(1)",           
+        "dsorg(po) dsntype(library,2) "rest                                     
+        alloc_ddout_rc = rc                                                     
+        if alloc_ddout_rc > 0 then do                                           
+          say rexxname": Output dsname "dsnout                                  
+          say "          Allocate of new file gave code "alloc_ddout_rc         
+          zispfrc = 16                                                          
+          say 'We exit with code' zispfrc                                       
+          if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'     
+          exit zispfrc                                                          
+        end /* if alloc_ddout_rc > 0                               */           
+      end /* when sysdsn_dsnout = 'DATASET NOT FOUND'              */           
+      otherwise do /* exit                                         */           
+        say rexxname": Output dsname "dsnout                                    
+        say '           ' sysdsn_dsnout                                         
+        zispfrc = 16                                                            
+        say 'We exit with code' zispfrc                                         
+        if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'       
+        exit zispfrc                                                            
+      end /* otherwise                                             */           
+    end /* select according to sysdsn_dsnout                       */           
+    /* dsname  for cp:       (note:   ' ''"  ' gives '"   )        */           
+    udsnout = '"//'''dsnout'''"' /* cp  *  "//'BOZO.SEQ.PDSE'"     */           
+ end /* if dsnout_present = "yes"                                  */           
+                                                                                
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Build command file read as standard input by bpxwunix.         */           
+ /*________________________________________________________________*/           
+                                                                                
+ "alloc f(ddcmd) unit(vio) tracks sp(1 1) recfm(f) lrecl(80) reuse"             
+ alloc_ddcmd_rc = rc                                                            
+ if alloc_ddcmd_rc > 0 then do                                                  
+   say rexxname": ddname ddcmd"                                                 
+   say "          Allocate gave code "alloc_ddcmd_rc                            
+   zispfrc = 16                                                                 
+   say 'We exit with code' zispfrc                                              
+   if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'            
+   exit zispfrc                                                                 
+ end /* if alloc_ddcmd_rc > 0                                      */           
+                                                                                
+ "newstack"                                                                     
+                                                                                
+ /* Queue statements.                                              */           
+ queue "set -x; "     /* trace goes to stderr.                     */           
+ tempdir = '/tmp/temp'random(99999)'/'  /* tempdir always created  */           
+ queue "mkdir "tempdir" && cd "tempdir" &&              "                       
+ if dsnin_present = "yes" then                                                  
+    queue "cp -U "udsnin" . &&   "      /* members in uppercase    */           
+                                                                                
+ /* "alloc f(begin) da('BOZO.SEQ01') shr reuse"       <-- debug    */           
+ address mvs "execio * diskr begin (fini"                                       
+                                                                                
+ if dsnin_present = "yes" then do                                               
+    queue "for mbr in *; do                             "                       
+    /* "alloc f(this$mbr) da('BOZO.SEQ02') shr reuse" <-- debug    */           
+    address mvs "execio * diskr this$mbr (fini"                                 
+    queue "done &&                                      "                       
+ end /* if dsnin_present = "yes"                                   */           
+                                                                                
+ /* "alloc f(end) da('BOZO.SEQ03') shr reuse"         <-- debug    */           
+ address mvs "execio * diskr end (fini"                                         
+                                                                                
+ if dsnout_present = "yes" then                                                 
+    queue "cp * "udsnout                                                        
+ queue "rm -r "tempdir                                                          
+ /* End of queuing statements.                                     */           
+                                                                                
+ address mvs "execio" queued() "diskw ddcmd (fini"                              
+ "delstack"                                                                     
+                                                                                
+ say                                                                            
+ say "Files:"                                                                   
+ say "dsnin  = "dsnin                                                           
+ say "dsnout = "dsnout                                                          
+ say                                                                            
+ say "Control cards:"                                                           
+ address mvs "execio * diskr ddcmd (stem ddcmd. fini"                           
+ say "Number "ddcmd.0":"                                                        
+ do i = 1 to ddcmd.0; say right(i,6) ddcmd.i; end                               
+ say                                                                            
+                                                                                
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Execute bpxwunix.                                              */           
+ /*________________________________________________________________*/           
+                                                                                
+ call set_env /* z/OS Unix environment variables                   */           
+                                                                                
+ drop stdout.; stdout.0 = 0    /* initialize standard output stem  */           
+ drop stderr.; stderr.0 = 0    /* initialize standard error stem   */           
+                                                                                
+ cmd = 'sh'                                                                     
+ call bpxwunix cmd,"dd:ddcmd",stdout.,stderr.,env.                              
+ bpxwunix_rc = rc                                                               
+                                                                                
+ say 'Standard output:'                                                         
+ do i = 1 to stdout.0                                                           
+    say right(i,6) stdout.i                                                     
+ end /* do i = 1 to stdout.0                                       */           
+ say                                                                            
+                                                                                
+ say 'Standard error (or trace):'                                               
+ do i = 1 to stderr.0                                                           
+    say right(i,6) stderr.i                                                     
+ end /* do i = 1 to stderr.0                                       */           
+                                                                                
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Show created or updated library dsnout.                        */           
+ /*________________________________________________________________*/           
+                                                                                
+ if sysvar("sysispf") = 'ACTIVE',                                               
+  & sysvar("sysenv")  = 'FORE'    then do  /* ISPF foreground      */           
+    address ispexec                                                             
+    "control errors return"                                                     
+    call show_output_dataset                                                    
+    address /* from ispexec                                        */           
+ end /*                                       ISPF foreground      */           
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ /* Clean up and exit.                                             */           
+ /*________________________________________________________________*/           
+                                                                                
+ drop ddcmd. stdout. stderr.                                                    
+ msg_prev = msg('off')                                                          
+   "free f(ddout ddcmd begin this$mbr end)"                                     
+ msg_off  = msg(msg_prev)                                                       
+ zispfrc = 0                                                                    
+ if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'              
+ exit zispfrc                                                                   
+                                                                                
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ set_env:                                                                       
+                                                                                
+ env.0 = 3                                                                      
+ env.1 = "PATH=.:/bin:usr/local/bin"                                            
+ env.2 = "LC_ALL="lc_all                                                        
+ env.3 = "_BPX_SHAREAS=MUST" /* ddname friendly, e.g. cat DD:DD01  */           
+                             /* cat "dd:dd01(mbr)"                 */           
+                                                                                
+ return                                                                         
+ /*________________________________________________________________*/           
+ /*                                                                */           
+ show_output_dataset: procedure expose dsnout                                   
+                                                                                
+ /* ISPF foreground assumed                                        */           
+ /* Equivalent to: Command ===> dslist pattern                     */           
+ /* DSL in caps                                                    */           
+ pattern = dsnout                                                               
+ "select pgm(isrdslst) parm(DSL '"pattern"') suspend scrname(dslist)"           
+ return                                                                         
+ /*________________________________________________________________*/           
+><)))°>                                                                         
+//       PEND                                                                   

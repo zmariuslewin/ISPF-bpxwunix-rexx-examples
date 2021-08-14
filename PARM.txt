@@ -1,0 +1,180 @@
+  /* rexx */                                                                    
+  trace o                                                                       
+                                                                                
+  parse arg group_dsn_by . /* optional: number of datasets to      */           
+                           /* allocate per ddname.                 */           
+  group_dsn_by_default = 16                                                     
+  if group_dsn_by = '' then group_dsn_by = group_dsn_by_default                 
+  else if datatype(group_dsn_by) <> 'NUM' then /* not a number     */           
+                            group_dsn_by = group_dsn_by_default                 
+  /* ISPF limits member list to the first 16 datasets allocated    */           
+  /* to a ddname.                                                  */           
+  /* group_dsn_by = 100 will allocate 100 datasets per ddname      */           
+  /* group_dsn_by = 1   one dataset per ddname                     */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Comments:                                                                  
+  say "PARMLIB datasets in ISRDDN format.                     "                 
+  say "To search in a group of up to 16 datasets:             "                 
+  say "V before ddname then Command ===> SRCHFOR ...          "                 
+  say "Examples of call:                                      "                 
+  say "Command ===> tso parm        /* 16  datasets per ddname     */           
+  say "Command ===> tso parm 1      /* 1   dataset  per ddname     */           
+    _______________________________________________________________*/           
+                                                                                
+  /* Set up command                                                */           
+                                                                                
+  command = 'd parmlib'                                                         
+  drop c.                                                                       
+  c.0 = 1                                                                       
+  c.1 = left(command,80)                                                        
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Execute command.                                              */           
+  /* Result in isfulog. stem                                       */           
+                                                                                
+  rc = isfcalls("on")                    /* access = on            */           
+  isfcons = "sdsf"random()               /* console = sdsfxxx      */           
+  isfdelay = 1 /* Wait 1 second before retrieving results          */           
+  address sdsf isfslash "("c.") (wait)"                                         
+  xrc = rc                               /* save return code       */           
+  rc = isfcalls("off")                   /* access = off           */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* If error, display command and error code.                     */           
+  /*                                                               */           
+                                                                                
+  if xrc > 0 then do                                                            
+     say "execution of "                                                        
+     do i = 1 to c.0                                                            
+        say '  'c.i                                                             
+     end /* do i = 1 to c.0                                        */           
+     say "gave code "xrc                                                        
+     zispfrc = 16                                                               
+     if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'          
+     exit zispfrc                                                               
+  end /* if xrc > 0                                                */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Display command result.                                       */           
+                                                                                
+  call stem_oedit isfulog.                                                      
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Build list of PARMLIB dataset names.                          */           
+                                                                                
+  entries = '' /* fully qualified quoted dataset name list         */           
+                                                                                
+  do i  = 1 to  isfulog.0                                                       
+     line = isfulog.i                                                           
+     w1 = word(line,1) /* first word                               */           
+     if datatype(w1) = 'NUM' then /* if numeric  dsn last word     */           
+        entries = entries" '"word(line,words(line))"'"                          
+  end /* do i = 1 to isfulog.0                                     */           
+  entries = strip(entries)                                                      
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Call isrddn with parameter: only (substring of ddname)        */           
+                                                                                
+   /* Allocate by group of 16 datasets to use VIEW and SRCHFOR     */           
+   /* (ISPF constraint).                                           */           
+   m = length(words(entries)) /* used in building ddnames,         */           
+   /* m is number of digits of number of datasets                  */           
+   ent = subword(entries,1,group_dsn_by) /* first 16 dsnames       */           
+   do n = 1 while words(ent) > 0                                                
+      "alloc shr reuse fi(DUMMY"right(n,m,'0')") da("ent")"                     
+      entries = subword(entries,group_dsn_by + 1) /* rest          */           
+      ent = subword(entries,1,group_dsn_by) /* first 16 of rest    */           
+   end /* do n = 1 while words(ent) > 0                            */           
+   /* At exit, n is (number of ddnames) + 1                        */           
+                                                                                
+   /* Show only ddnames with substring DUMMY.                      */           
+   shlon = 'lon' /* SHort or LONg                                  */           
+   if group_dsn_by = 1 then shlon = 'sh' /* SHort                  */           
+   address tso "isrddn only DUMMY;"shlon";cou;",   /*  count executed */        
+               "m *AB*  dup v+srchfor help"        /* <- not executed */        
+                                                                                
+   do i = 1 to n-1                                                              
+      "free fi(DUMMY"right(i,m,'0')")"                                          
+   end /* do i = 1 to n-1                                          */           
+                                                                                
+  /*_______________________________________________________________*/           
+  /* Normal exit.                                                  */           
+                                                                                
+  zispfrc = 0                                                                   
+  if sysvar(sysispf) = 'ACTIVE' then address ispexec 'vput zispfrc'             
+  exit zispfrc                                                                  
+  /*_______________________________________________________________*/           
+                                                                                
+  stem_oedit:                                                                   
+  parse arg stem.                                                               
+                                                                                
+  /* Example of call:                                              */           
+  /*   drop c.; c.0 = 1; c.1 = 'test'                              */           
+  /*   call stem_oedit c.                                          */           
+                                                                                
+  /* Copy stem to a temporary file.                                */           
+  /* oedit the temporary file.                                     */           
+  /* Remove the temporary file.                                    */           
+                                                                                
+  stem_list = stem.                                                             
+  call stem_oedit_with_stem_list stem.                                          
+  return                                                                        
+                                                                                
+  stem_oedit_with_stem_list: procedure expose (stem_list)                       
+  /* expose stem. through stem_list                                */           
+  parse arg stem. /* stem_list contains stem. e.g. 'a. b.'         */           
+                                                                                
+  temp = '/tmp/temp'random(1,99999)  /* temporary file             */           
+  temp = temp' Press F3 to delete this temporary file'                          
+  /* temp = temp' ><)))°> F3 to exit <°(((><'                      */           
+                                                                                
+  /* Copy stem to temp                                             */           
+  /* 2>&1 standard error redirected to standard output             */           
+  /* To check if temp is present:   Command ===> epdf /tmp         */           
+  /* If temp file name has no spaces:                              */           
+  /* call bpxwunix 'cat > 'temp' 2>&1',stem.                       */           
+  call bpxwunix "cat > '"temp"' 2>&1",stem.                                     
+                                                                                
+  oedit temp                                                                    
+                                                                                
+  /* ISPF alternatives to using oedit:                             */           
+  /* Examples:                                                                  
+  temp = "/u/bozo/test.txt"                                                     
+  address ispexec                                                               
+    "control errors return"                                                     
+    macro = "only"   /* example                                    */           
+    parm  = "LIB; hide x; locate 8; tso time"                                   
+    "control display lock" /* if parm contains semicolon           */           
+    "view file(temp) macro("macro") parm(parm)"                                 
+                                                                                
+    macro = "c"      /* example                                    */           
+    parm  = "first second all; save; end"                                       
+    "control display lock" /* if parm contains semicolon           */           
+    "edit file(temp) macro("macro") parm(parm)"                                 
+  address /* from ispexec                                          */           
+  */                                                                            
+                                                                                
+  /* Update stem and if update Ok, then remove temp.               */           
+  /* If temp file name has no space:                               */           
+  /* call bpxwunix 'cat 'temp' && rm 'temp,,stem.                  */           
+  /* A && B  : if A Ok then execute B                              */           
+  /* Standard output from cat goes to stem.                        */           
+                                                                                
+  err.0 = 0                                                                     
+  call bpxwunix "cat '"temp"' && rm '"temp"'",,stem.,err.                       
+       if err.0 > 0 then do      Error processing                  */           
+          say "Error in updating stem or removing temporary file."              
+          say "Check with Command ===> epdf /tmp"                               
+          do i = to err.0                                                       
+             say "  "err.i                                                      
+          end /* do i = to err.0                                   */           
+          say "Content of stem.:"                                               
+          do i = to stem.0                                                      
+             say right(i,5)' 'stem.i                                            
+          end /* do i = to stem.0                                  */           
+          say                                                                   
+       end /* if err.0 > 0                                         */           
+                                                                                
+  return                                                                        
+  /*_______________________________________________________________*/           
