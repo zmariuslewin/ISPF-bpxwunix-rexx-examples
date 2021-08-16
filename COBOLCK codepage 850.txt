@@ -1,0 +1,638 @@
+/* rexx */
+trace o
+
+ /* rexx and edit macro.                                         */
+ /* It gives the main characteristics of a COBOL source program. */
+
+ /* Example of use:                                              */
+ /*                                                              */
+ /* VIEW              BOZO.SOURCE.COBOL                          */
+ /* Command ===>                                                 */
+ /*            Name     Prompt       Size                        */
+ /* _________ SOURCE01                                           */
+ /* cobolck__ SOURCE02                                           */
+ /* _________ SOURCE03                                           */
+ /*                                                              */
+
+ /* It displays a temporary dataset.                             */
+ /* When we exit by PF3, the temporary dataset is deleted.       */
+ /* COBOLCK is 'read only'.                                      */
+
+ parse source . . rexxname .
+
+ /* Indicates whether source is TELON or NATIVE                  */
+ /* (if TELON, indicate PROGRAM-TYPE),                           */
+ /* whether it is a subroutine or not,                           */
+ /* whether it is BATCH or CICS                                  */
+ /* whether it contains an EXEC SQL instruction                  */
+ /* and whether it contains a call to MQ Series.                 */
+ /* It also list:                                                */
+ /* Program id.                                                  */
+ /* Date compiled.                                               */
+ /* Linkage section.                                             */
+ /* Procedure division statement.                                */
+ /* Copybooks.                                                   */
+ /* Calls being made.                                            */
+ /* All EXEC CICS and EXEC SQL statements.                       */
+
+ /* Examples of use for cobolck:                                 */
+ /*                                                              */
+ /* 1) As a rexx, in a member list:                              */
+ /*         VIEW      BOZO.SOURCE.COBOL                          */
+ /* Command ===>                                                 */
+ /*            Name     Prompt       Size                        */
+ /* cobolck__ SOURCE01                                           */
+ /*                                                              */
+ /* 2) As a rexx on a command line:                              */
+ /* Command ==> tso cobolck 'BOZO.SOURCE.COBOL(SOURCE01)'        */
+ /*                                                              */
+ /* 3) As a rexx preserving lower case:                          */
+ /* Command ==> cmde                                             */
+ /* Enter TSO commands below:                                    */
+ /* ===> cobolck /u/bozo/source01                                */
+ /* ===> cobolck 'bozo.source.cobol(source01)' macro(a) parm(b)  */
+ /*                                                              */
+ /* 4) As an edit macro:                                         */
+ /*            BOZO.SOURCE.COBOL(SOURCE01)                       */
+ /* Command ===> cobolck                                         */
+
+ address isredit
+ 'macro (parm)'
+ macro_rc = rc
+ select /* according to macro_rc                                 */
+
+ /*_______________ EDIT MACRO ___________________________________*/
+   when macro_rc = 0  then do /* it is an edit macro             */
+     '(save)   = user_state'
+     '(dataset) = dataset'
+     '(member)  = member'
+     /* member = '' for a sequential data set                    */
+     if member <> '' then dataset = dataset"("member")"
+
+     service = "view"
+
+     /* If parm begins by dataset, remove it.                    */
+     a = translate(strip(word(parm,1),,"'"))
+     b = translate(dataset)
+     if length(a) = length(b) then do /* same length             */
+        if a = b then
+           parm = subword(parm,2) /* remove first word with dataset */
+     end /* if length(a) = length(b)                             */
+     else do /* not the same length                              */
+        parse var a a1 '('
+        parse var b b1 '('
+        if a1 = b1 then /* compare what is before left parent    */
+           parm = subword(parm,2) /* remove first word with dataset */
+     end /*     not the same length                              */
+
+ address tso 'newstack'
+ queue 'Show the nature of COBOL source 'dataset':'
+ queue ' '
+ /*______________ Search for TELON ____________________________  */
+
+ /* line contains TELON ID and is not a COBOL comment            */
+ /*       ^   beginning of line                                  */
+ /*               .*  zero or more any character                 */
+ /*                       * one blank and zero or more blanks    */
+ regex = "^...... .*TELON ID"
+ "find r'"regex"' first"
+ find_rc = rc
+ /*
+ Return codes:
+ 0 Normal completion
+ 4 String not found
+ 12 Syntax error
+ 20 Severe error
+ */
+ select /* according to find_rc                                  */
+   when find_rc = 0 then do
+     telon = 'yes'
+     telon_string = '   TELON'
+     regex = "^...... .* PROGRAM-TYPE "
+     "find r'"regex"' first"
+     find_rc2 = rc
+     select /* according to find_rc2                             */
+       when find_rc2 = 0 then do
+         "(line) = line .zcsr"
+         parse var line . 'VALUE' rest
+         /* program_type is first word of rest with no quote no dot */
+         program_type = word(rest,1)
+         program_type = strip(translate(program_type,'',"'."))
+         telon_string = telon_string' TYPE 'program_type' '
+       end /* when find_rc2 = 0                                  */
+       otherwise do
+         telon_string = telon_string' TYPE ? '
+       end /* otherwise                                          */
+     end /* select according to find_rc2                         */
+   end /* when find_rc = 0                                       */
+   when find_rc = 4 then do
+     telon = 'no'
+   end /* when find_rc = 4                                       */
+   otherwise do
+     telon = 'no'
+     queue 'Member 'right(member,8)' find telon rc = 'find_rc
+   end /* otherwise                                              */
+ end /* select according to find_rc                              */
+ /*______________ End of search for TELON _____________________  */
+
+ /*______________ Check if subroutine _________________________  */
+ call tell_if_subroutine
+ sub = result /* 'NOT A SUBROUTINE' or '      SUBROUTINE'        */
+ /*______________ End of check if subroutine __________________  */
+
+ /*______________ Search for CICS __________________________ ___ */
+ regex = "^...... .*EXEC  *CICS "
+ "find r'"regex"' first"
+ find_rc = rc
+ select /* according to find_rc                                  */
+   when find_rc = 0 then cics = 'yes'
+   when find_rc = 4 then cics = 'no'
+   otherwise queue 'Member 'right(member,8)' find cics rc = 'find_rc
+ end /* select according to find_rc                              */
+ /*______________ End of search for CICS ______________________  */
+
+ /*______________ Search for SQL ______________________________  */
+ /* line contains EXEC SQL and is not a COBOL comment            */
+ regex = "^...... .*EXEC  *SQL "
+ "find r'"regex"' first"
+ find_rc = rc
+ select /* according to find_rc                                  */
+   when find_rc = 0 then sql = 'yes'
+   when find_rc = 4 then sql = 'no'
+   otherwise queue 'Member 'right(member,8)' find sql rc = 'find_rc
+ end /* select according to find_rc                              */
+ /*______________ End of search for SQL _______________________  */
+
+ /*______________ Search for MQCONN, MQGET, MQPUT, MQDISC _____  */
+ /* line contains EXEC SQL and is not a COBOL comment            */
+ regex = "^...... .*MQ(CONN!GET!PUT!DISC)" /* batch       1047   */
+ regex = "^...... .*MQ(CONN|GET|PUT|DISC)" /* interactive 1147   */
+ /* caret has the same hexa code in IBM-1047 and IBM-1147 French */
+ "find r'"regex"' first"
+ find_rc = rc
+ mq = '     '
+ select /* according to find_rc                                  */
+   when find_rc = 0 then mq = '   MQ'
+   when find_rc = 4 then mq = 'NO MQ'
+   otherwise queue 'Member 'right(member,8)' find mq rc = 'find_rc
+ end /* select according to find_rc                              */
+ /*______________ End of search for MQCONN, MQGET, MQPUT, MQDISC */
+
+ /*______________ queue result _________________________________ */
+ string = 'Member 'left(member,8)': '
+
+ select
+   when telon = "yes" then do
+     string = string!!telon_string!!sub
+     select /* whether CICS or not CICS, SQL or no SQL           */
+       when cics = 'no' & sql = 'no' then do
+         queue string'  NO CICS  NO SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: TLNBXGxL'
+       end /* when cics = 'no' & sql = 'no'                      */
+       when cics = 'no' & sql = 'yes' then do
+         queue string'  NO CICS     SQL  'mq
+         if mq = 'NO MQ' then do
+            if program_type <> 'P' then queue 'Procedure: TL2BXGxL'
+                                  else queue 'Procedure: TL2SXGxL'
+         end /* if mq = 'NO MQ'                                  */
+       end /* when cics = 'no' & sql = 'yes'                     */
+       when cics = 'yes' & sql = 'no' then do
+         queue string'     CICS  NO SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: TLNCXGxL'
+       end /* when cics = 'yes' & sql = 'no'                     */
+       when cics = 'yes' & sql = 'yes' then do
+         queue string'     CICS     SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: TL2CXGxL'
+       end /* when cics = 'yes' & sql = 'yes'                    */
+       otherwise queue string'       ?      ?     ?      ?'
+       end    /* select whether CICS or not CICS, SQL or no SQL  */
+   end /* when telon = "yes" */
+
+   when telon = "no" then do
+     string = string' NATIVE         'sub
+     select /* whether CICS or not CICS, SQL or no SQL           */
+       when cics = 'no' & sql = 'no' then do
+         queue string'  NO CICS  NO SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: COBxUCL'
+       end /* when cics = 'no' & sql = 'no'                      */
+       when cics = 'no' & sql = 'yes' then do
+         queue string'  NO CICS     SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: COBxUCL2'
+       end /* when cics = 'no' & sql = 'yes'                     */
+       when cics = 'yes' & sql = 'no' then do
+         queue string'     CICS  NO SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: DFHCOBxL'
+       end /* when cics = 'yes' & sql = 'no'                     */
+       when cics = 'yes' & sql = 'yes' then do
+         queue string'     CICS     SQL  'mq
+         if mq = 'NO MQ' then queue 'Procedure: DFHCOBxD'
+       end /* when cics = 'yes' & sql = 'yes'                    */
+       otherwise queue string'       ?      ?     ?      ?'
+       end    /* select whether CICS or not CICS, SQL or no SQL  */
+   end /* when telon = "no"  */
+
+   otherwise queue "Valeur trouvée pour telon est >"telon"< inconnue."
+ end /* select               */
+
+
+ queue
+ queue "Show lines with CBL or PROCESS, if any:"
+ regex = ' CBL | PROCESS '
+ /* '|' OR in IBM-1147                                           */
+ call show_all
+
+ queue
+ queue "Show line with PROGRAM-ID:"
+ regex = "^...... .*PROGRAM-ID\."
+ call show_first
+
+ queue
+ queue "Show line with DATE-COMPILED, if any:"
+ regex = "^...... .*DATE-COMPILED\."
+ call show_first
+
+ if telon = 'yes' & program_type = 'P' then do
+    queue
+    queue "Show lines with 'S T O R E D', if any:"
+    regex = ' S T O R E D '
+    call show_all
+ end /* if telon = 'yes & program_type = 'P'                     */
+
+ /* Show lines between LINKAGE SECTION and PROCEDURE DIVISION.   */
+ queue
+ queue "Show lines between LINKAGE SECTION and PROCEDURE DIVISION,",
+     "if any:"
+ regex1 = "^...... .*LINKAGE  *SECTION"
+ regex2  = "^...... .*PROCEDURE  *DIVISION"
+ call show_all_included_except_last
+
+ regex = "^...... .*PROCEDURE  *DIVISION"
+ /* '  *' at least one blank                                     */
+ call show_until_dot
+
+ /* Search for first CALL with quotes.                           */
+ /* Static call if compilation parameter NODYNAM.                */
+ /* regex = "^...... .*CALL  *'"                                 */
+ /* call show_first                                              */
+ queue
+ queue "Show CALL statements, if any:"
+ regex = "^...... .*CALL "
+ call show_all
+
+ queue
+ queue "Show lines with COPY, if any:"
+ regex = "^...... .* COPY "
+ call show_all
+
+ /* Show EXEC CICS or EXEC SQL statements.                       */
+ regex1 = "^...... .*EXEC  *SQL|^...... .*EXEC  *CICS"
+ regex2 = "^...... .*END-EXEC"
+ queue
+ queue 'List of EXEC CICS and EXEC SQL statements, if any:'
+ call show_all_included
+
+ '(nl) = linenum .zl'     /* nl is total line number             */
+ nl = nl + 0              /* remove leading zeroes               */
+ queue
+ queue 'Total line number in source: 'nl
+ /*______________ End of queue result __________________________ */
+
+     /*__________________________________________________________*/
+     /* Allocate output file.                                    */
+
+     /* Allocate dsnprint dataset                                */
+     time_stamp = t!!time('s')
+     dsnprint = userid()"."rexxname"."time_stamp /* DDPRINT file */
+     address tso "allocate fi(ddprint) da('"dsnprint"') reuse",
+     "new catalog",
+     "lrecl(80) recfm(f b) blksize(0)",
+     "space(1 15) tracks"
+     arc = rc
+     if arc > 0 then do
+        say rexxname "DDPRINT allocate gave code "arc
+        exit(12)
+     end /* if arc > 0 */
+     /*                                                          */
+
+     address tso "execio "queued()" diskw ddprint (finis"
+     address tso 'delstack'
+
+     /*__________________________________________________________*/
+     /* Display DDPRINT                                          */
+     address ispexec
+     "lminit dataid(dd1) dataset('"dsnprint"') enq(shr)"
+     "view   dataid("dd1")"
+
+     /*__________________________________________________________*/
+     /* Clean up                                                 */
+     "lmfree dataid("dd1")"
+     address /* from ispexec                                     */
+     x = msg("off")
+     address tso
+     "free fi(ddprint)"
+     "delete '"dsnprint"'"
+     address
+     x = msg(x)
+
+     /* extra commented out as too long for user
+     /* dataset is COBOL source       e.g. EIA1.APGM.COBOL(ABC)    */
+     /* dsnload is the program object e.g. EIA1.ALDBTCH.COBOL(ABC) */
+     /* We replace the second qualifier.                           */
+     parse var dataset head '.' second_qual '.' tail
+     if second_qual = 'APGM' then do
+        select /* determine new second qualifier                   */
+          when substr(member,3,2) = 'SP' then second_qual = 'ALDPROC'
+          when cics = 'yes'              then second_qual = 'ALDCICS'
+          otherwise                           second_qual = 'ALDBTCH'
+        end /* select    determine new second qualifier            */
+        dsnload = head'.'second_qual'.'tail
+        say "Show linkedit/bind parameters and date for "dsnload
+        call amb "'"dsnload"'"        /* amblist rexx              */
+        say "Show compile parameters if COBOL version less than 6:"
+        call ana "'"dsnload"'"        /* COBOL analyzer rexx       */
+     end /* if second_qual = 'APGM'                                */
+        extra commented out as too long for user */
+
+     'user_state = (save)'
+     'end'
+     address /* from isredit                                     */
+     exit
+   end /* when macro_rc = 0             it is an edit macro      */
+
+ /*_______________ REXX _________________________________________*/
+   when macro_rc = 20 then do /* assume it is a rexx             */
+     /* rexx name to contain eiher '2E' or '2U'                  */
+     parse arg dataset .
+     parm = arg(1) /* dataset is first word of parm              */
+     dataset = strip(dataset,,"'")       /* remove quotes if any */
+     address ispexec
+     'control errors return'
+
+       call save_initial_macro /* reset at end if changed        */
+
+       if pos(left(dataset,1),'/.') = 0 then do           /* MVS */
+            /* Check MVS dataset existence.                      */
+            sysdsn_result = sysdsn("'"dataset"'")
+            if sysdsn_result <> 'OK' then do
+               say
+               say rexxname" sysdsn('"dataset"') gave result:"
+               say sysdsn_result
+               say 'We exit with code 16.'
+               exit 16
+            end /* if sysdsn_result <> 'OK'                      */
+            /* parm(parm) edit macro will inherit rexx parameters */
+            "view dataset('"dataset"') macro("rexxname") parm(parm)"
+       end /* MVS                                                */
+       /* If z/OS Unix file does not exist, it will be created   */
+       else "view file(dataset) macro("rexxname") parm(parm)"
+       view_from_rexx_rc = rc
+
+       if view_from_rexx_rc <> 0 then do
+          say
+          say rexxname" View from rexx gave rc = "view_from_rexx_rc
+               call restore_initial_macro
+               call set_viewrc /* set up message stem            */
+               /* say message for this return code               */
+               say viewrc.view_from_rexx_rc
+               say 'We exit with code 16.'
+               exit 16
+       end /* if view_from_rexx_rc <> 0                          */
+
+       call restore_initial_macro
+
+     address /* from ispexec                                     */
+     exit
+   end /* when macro_rc = 20     assume it is a rexx             */
+
+ /*_______________ OTHERWISE ____________________________________*/
+   otherwise do /* macro_rc different of 0 and 20                */
+     say
+     say rexxname" macro_rc = "macro_rc
+     say "We exit with code 16."
+     exit 16
+   end /* otherwise                                              */
+
+ end /* select according to macro_rc                             */
+ /* end of rexx main part (we exit in select)                    */
+
+ /*______________________________________________________________*/
+ save_initial_macro:
+
+   address ispexec
+   'control errors return'
+     "vget zdaemac profile" /* variable in panel ISRUEDIT        */
+     /* (ISRUEDIT is "EDIT Entry Panel" obtained by S before     */
+     /* member name and a '/' in the prompt column).             */
+     /* Confer also Command ===> edset                           */
+     /*        and edit profile IMACRO.                          */
+     zdaemac_old = zdaemac  /* save to reset at exit if changed  */
+   address /* from ispexec                                       */
+   return
+ /*______________________________________________________________*/
+ restore_initial_macro:
+
+   /* If initial edit macro name changed as                      */
+   /* in View of a z/OS Unix directory,                          */
+   /* reset initial edit macro name to previous value.           */
+   address ispexec
+   'control errors return'
+     "vget zdaemac profile" /* variable in panel ISRUEDIT        */
+     if zdaemac <> zdaemac_old then do
+        zdaemac = zdaemac_old
+        "vput zdaemac profile" /* restore                        */
+        /* to suppress: "verase zdaemac profile"                 */
+     end /* if zdaemac was changed                               */
+   address /* from ispexec                                       */
+   return
+ /*______________________________________________________________*/
+ set_viewrc: procedure expose viewrc.
+
+ /* Set up viewrc. message stem for ISPF View.                   */
+ /* viewrc.i contains the message for View return code i         */
+ viewrc.0  = "Normal completion."
+ viewrc.10 = "Member or generation (if specified) not found."
+ viewrc.12 = "VIEW has been disabled through the ISPF configuration",
+             "table."
+ viewrc.14 = "Member, sequential data set, or z/OS UNIX file in use."
+ viewrc.16 = "No members matched the pattern or no members in the PDS."
+ viewrc.18 = "VSAM data set was specified but VSAM processing",
+             "not allowed."
+ viewrc.20 = "Severe error; unable to continue."
+ return
+ /*______________________________________________________________*/
+ show_first: procedure expose regex
+
+ "find r'"regex"' first"
+ find_rc = rc
+ if find_rc = 0 then do
+    "(line) = line .zcsr" /* get line at cursor                  */
+    queue left(line,72)
+ end /* if find_rc = 0                                           */
+ return
+ /*______________________________________________________________*/
+ show_all: procedure expose regex
+
+ "find r'"regex"' first"
+ find_rc = rc
+ do while find_rc = 0
+    "(line) = line .zcsr"      /* get line at cursor             */
+    "(lineno) = linenum .zcsr" /* get line number                */
+    queue left(line,72)
+    "cursor = "lineno" 80"
+    "find r'"regex"' next"
+    find_rc = rc
+ end /* do while find_rc = 0                                     */
+ return
+ /*______________________________________________________________*/
+ show_all_included: procedure expose regex1 regex2
+ /* Show all lines in between a line with regex1                 */
+ /* and a line with regex2 (bounds included)                     */
+ /* excluding COBOL comments (col. 7 not blank).                 */
+
+ "find r'"regex1"' first"
+ find_rc1 = rc
+ if find_rc1 = 0 then '(lineno1) = linenum .zcsr'
+ "find r'"regex2"' next"
+ find_rc2 = rc
+ if find_rc2 = 0 then '(lineno2) = linenum .zcsr'
+
+ do while find_rc1 = 0 & find_rc2 = 0
+    do i = lineno1 to lineno2
+       "(line) = line "i
+       if pos(' SKIP',line) > 0  then iterate
+       if pos(' EJECT',line) > 0 then iterate
+       /* if not a COBOL comment then queue                      */
+       if substr(line,7,1) = ' ' then queue left(line,72)
+    end /* do i = lineno1 to lineno2                             */
+    if lineno1 = lineno2 then 'cursor = 'lineno2' 80'
+
+    "find r'"regex1"' next"
+    find_rc1 = rc
+    if find_rc1 = 0 then '(lineno1) = linenum .zcsr'
+    "find r'"regex2"' next"
+    find_rc2 = rc
+    if find_rc2 = 0 then '(lineno2) = linenum .zcsr'
+ end /* do while find_rc1 = 0 & find_rc2 = 0                     */
+ return
+ /*______________________________________________________________*/
+ show_all_included_except_last: procedure expose regex1 regex2
+ /* Show all lines in between a line with regex1                 */
+ /* and a line with regex2 (first bound included,                */
+ /* last bound not included,                                     */
+ /* excluding COBOL comments (col. 7 not blank).                 */
+
+ "find r'"regex1"' first"
+ find_rc1 = rc
+ if find_rc1 = 0 then '(lineno1) = linenum .zcsr'
+                 else return
+ "find r'"regex2"' next"
+ find_rc2 = rc
+ if find_rc2 = 0 then '(lineno2) = linenum .zcsr'
+
+ do while find_rc1 = 0 & find_rc2 = 0
+    do i = lineno1 to lineno2 - 1
+       "(line) = line "i
+       if pos(' SKIP',line) > 0  then iterate
+       if pos(' EJECT',line) > 0 then iterate
+       /* if not a COBOL comment then queue                      */
+       if substr(line,7,1) = ' ' then queue left(line,72)
+    end /* do i = lineno1 to lineno2                             */
+    if lineno1 = lineno2 then 'cursor = 'lineno2' 80'
+
+    "find r'"regex1"' next"
+    find_rc1 = rc
+    if find_rc1 = 0 then '(lineno1) = linenum .zcsr'
+                    else return
+    "find r'"regex2"' next"
+    find_rc2 = rc
+    if find_rc2 = 0 then '(lineno2) = linenum .zcsr'
+ end /* do while find_rc1 = 0 & find_rc2 = 0                     */
+ return
+ /*______________________________________________________________*/
+ show_until_dot: procedure expose regex
+
+ "find r'"regex"' first"
+ find_rc = rc
+ if find_rc = 0 then do
+    "(line)   = line    .zcsr" /* get line at cursor             */
+    "(lineno) = linenum .zcsr" /* get line number at cursor      */
+    /* Check present line or following lines for a dot.          */
+    do i = 1 to 10
+       queue left(line,72)
+       if pos('. ',substr(line,8,65)) > 0 then leave
+       /* Obtain next line.                                      */
+       lineno = lineno + 1
+       "(line)   = line "lineno
+    end /* do i = 1 to 10                                        */
+ end /* if find_rc = 0                                           */
+ return
+ /*______________________________________________________________*/
+ tell_if_subroutine: procedure
+
+ string = '' /* Initialize content of statement.                 */
+ regex = "^...... .*PROCEDURE  *DIVISION"
+ /* '  *' at least one blank                                     */
+ "find r'"regex"' first"
+ find_rc = rc
+ if find_rc = 0 then do
+    "(line)   = line    .zcsr" /* get line at cursor             */
+    "(lineno) = linenum .zcsr" /* get line number at cursor      */
+    /* Check present line or following lines for a dot.          */
+    do i = 1 to 30
+       p = pos('.',substr(line,8,65))
+       if p > 0 then do /* ending dot in line                    */
+          /* concatenate up to but not including ending dot      */
+          string = string !! substr(line,8,p-1)
+          leave
+       end /* ending dot in line                                 */
+       else do /* no dot in line                                 */
+          string = string !! substr(line,8,65)  /* cols. 8 to 72 */
+       end     /* no dot in line                                 */
+       /* Obtain next line.                                      */
+       lineno = lineno + 1
+       "(line)   = line "lineno
+    end /* do i = 1 to 30                                        */
+ end /* if find_rc = 0                                           */
+
+ /* process string                                               */
+ string = translate(strip(string))
+
+ /* remove PROCEDURE DIVISION                                    */
+ q = pos('DIVISION',string)
+ string = substr(string,q + length('DIVISION'))
+
+ /* remove USING, if present                                     */
+ r = pos('USING',string)
+ if r > 0 then string = substr(string,r + length('USING'))
+
+ /* remove DFHCOMMAREA, if present                               */
+ s = pos('COMMAREA',string)
+ if s > 0 then string = substr(string,s + length('COMMAREA'))
+
+ /* remove BY, if present                                        */
+ call remove_item('by')
+
+ /* remove REFERENCE, if present                                 */
+ call remove_item('reference')
+
+ /* remove VALUE, if present                                     */
+ call remove_item('value')
+
+ string = strip(string)
+ /* string should contain parameters, if any                     */
+ if length(string) = 0 then return 'NOT A SUBROUTINE'
+                       else return '      SUBROUTINE'
+ /*______________________________________________________________*/
+remove_item: procedure expose string
+/* Ignore case of item and string.                               */
+parse arg item .
+item_upper   = translate(item)
+string_upper = translate(string)
+p = wordpos(item_upper,string_upper)
+do while p > 0
+   string = delword(string,p,1) /* remove p-th word              */
+   string_upper = translate(string)
+   p = wordpos(item_upper,string_upper)
+end /* do while p > 0                                            */
+return
+ /*______________________________________________________________*/

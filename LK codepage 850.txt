@@ -1,0 +1,379 @@
+/* rexx */
+ trace o
+ parse source . . rexxname .
+
+ /* The main use of this rexx is to give the            */
+ /* linkedit/bind date of a load module/program object. */
+
+ /*
+ Examples of use:
+ Command ===> tso lk 'BOZO.LOAD(MEMBER1)'
+ or
+ VIEW              BOZO.LOAD
+ Command ===>
+            Name     Prompt        Alias-of     Size      TTR
+ lk_______ MEMBER1                            00001168   000018
+
+ */
+
+ /*
+ say
+ say "Examples of use:                                 "
+ say "Command ===> tso "rexxname" 'BOZO.LOAD(MEMBER1)' "
+ say "or "rexxname" before member name in a member list"
+ say
+ */
+
+ /* AMBLIST with LISTIDR, extract linkedit/bind date  */
+ /* and SSI.                                          */
+
+ /* Try to extract linkedit/bind jobname at end of    */
+ /* load module/program object.                       */
+
+ /* If jobname obtained, try to get person's name     */
+ /* with RACF LISTUSER using jobname first seven      */
+ /* characters.                                       */
+
+ parse arg dsn .
+ dsn = strip(dsn,,"'")                /* remove surrounding quotes */
+ parse var dsn dsn '(' member ')' .   /* extract member if present */
+
+ call linkdate(dsn member)
+ date = word(result,1)
+ time = word(result,2)
+ ssi  = word(result,3)
+
+
+ /*__________________________________________________________*/
+ /* Display SYSPRINT                                         */
+ /* *** In comment
+ address ispexec
+ "lminit dataid(dd1) dataset('"dsnprint"') enq(shr)"
+ "view   dataid("dd1")"
+ "lmfree dataid("dd1")"
+ address
+ End of comment ***                                          */
+
+ /*___________________________________________________________*/
+ /* Try to obtain jobname in the load module/program object   */
+ /* then person's name.                                       */
+ job = jobname(dsn member)
+ if job = 'JOBNAME' then do              /* jobname not found */
+    name = 'LUNAME'
+    signal continue
+ end /* if job = 'JOBNAME'                  jobname not found */
+
+ /* Assume that userid is first seven characters of jobname   */
+ name = luname(substr(job,1,length(job)-1))
+
+ continue:
+
+ /* Display results                                           */
+ if ssi = 'SSI'     then ssi  = 'Non available'
+ if job = 'JOBNAME' then job  = 'Non available'
+ if name = 'LUNAME' then name = 'Non available'
+ call display_result
+
+ /* Commented out
+ /*___________________________________________________________*/
+ /* Call COBOL Analyzer                                       */
+ x = msg("off") /* no message if not present                  */
+   call ana("'"dsn"("member")'")
+ x = msg(x)
+    End of comment                                            */
+
+ exit
+/*___________________________________________________________*/
+ linkdate: procedure
+
+ /* Return date and time of linkedit/bind and SSI            */
+ /* from a load module/program object, using AMBLIST.        */
+ /* If date not found then date = 'DATE', time = 'TIME'.     */
+ /* If line with ' SSI:' not found, then ssi = 'SSI'.        */
+ /* Example of call:                                         */
+ /*   call linkdate(dsn member)                              */
+ /*   date = word(result,1)     e.g. 2020/07/23              */
+ /*   time = word(result,2)     e.g. 10:50:31                */
+ /*   ssi  = word(result,3)     e.g. 62200723 also NONE      */
+ /*   if date = 'DATE' then call errordate                   */
+ /*   if ssi  = 'SSI'  then call errorssi                    */
+
+ parse arg dsn member .
+ /*__________________________________________________________*/
+ /* AMBLIST                                                  */
+
+ /* Allocate dsnprint dataset (AMBLIST output file).               */
+ time_stamp = t!!time('s')
+ call set_up_prefix
+ dsnprint = prefix"."rexxname"."time_stamp   /* SYSPRINT file    */
+ "allocate fi(sysprint) da('"dsnprint"') reuse",
+ "new catalog",
+ "lrecl(121) recfm(f b a) blksize(0)",
+ "space(1 15) tracks"
+ arc = rc
+ if arc > 0 then do
+    say "AMBLIST SYSPRINT allocate gave code "arc
+    return date' 'time' 'ssi   /* result = 'DATE TIME SSI'   */
+ end /* if arc > 0 */
+
+ /* Allocate input library                                   */
+ "alloc fi(ddn) da('"dsn"') shr reuse"
+
+ /* Building SYSIN control card                              */
+ "newstack"
+ queue " LISTIDR  DDN=DDN,MEMBER="member
+ 'alloc fi(sysin) unit(sysallda) tracks sp(1) reuse'
+ address mvs "execio" queued() "diskw sysin (finis"
+ "delstack"
+
+ /* Execute AMBLIST                                          */
+ 'amblist'
+ xrc = rc                /* save amblist return code         */
+ if xrc > 0 then do
+    say "AMBLIST execution gave code "xrc
+    return date' 'time' 'ssi
+ end /* if xrc > 0 */
+
+ /*__________________________________________________________*/
+ /* Extract linkedit/bind date from SYSPRINT                 */
+ address MVS "execio * diskr sysprint (stem sysprint. fini"
+ do i = 1 to sysprint.0
+    line = sysprint.i
+    if pos('THIS PROGRAM OBJECT',line) > 0 !, /* or          */
+       pos('THIS LOAD MODULE',line) > 0       then do
+       /* Extract past ' ON '                                */
+       p = pos(' ON ',line)
+       if p = 0 then iterate     /* ' ON ' not present       */
+       date = substr(line,p+4)   /* line past ' ON '         */
+       /* remove last dot if present                         */
+       date = strip(strip(date),'t','.') /* t: trailing      */
+       parse var date date 'AT' time
+       date = strip(date)
+       time = strip(time)
+       if time = '' then time = '00:00:00' /* not provided   */
+       select /* set date as YYYY/MM/DD                      */
+         when pos('DAY',date) > 0 then do
+           parse var date . 'DAY' jjj 'OF YEAR' yyyy
+           jjj  = strip(jjj)   /* julian                     */
+           yyyy = strip(yyyy)
+           date = gregorian(yyyy!!jjj)
+           parse var date yyyy +4 mm +2 dd /* split          */
+           date = yyyy'/'mm'/'dd
+         end /* when pos('DAY',date) > 0                     */
+         otherwise do
+           parse var date mm '/' jj '/' yyyy
+           date = yyyy'/'mm'/'jj /* could be sorted          */
+         end /* otherwise                                    */
+       end /* select    set date as YYYY/MM/DD               */
+       leave
+    end /* if pos('THIS PROGRAM OBJECT',line) > 0 ...        */
+ end /* do i = 1 to sysprint.0                               */
+
+ /*__________________________________________________________*/
+ /* Extract SSI information from SYSPRINT                    */
+ do i = 1 to sysprint.0
+    line = sysprint.i
+    if pos(' SSI:',line) > 0 then do
+       /* Extract past ' SSI:'                               */
+       p = pos(' SSI:',line)
+       if p = 0 then iterate    /* ' SSI:' not present       */
+       ssi = substr(line,p+5)   /* line past ' SSI:'         */
+       ssi = word(ssi,1)
+       leave
+    end /*                                                   */
+ end /* do i = 1 to sysprint.0                               */
+
+ /*__________________________________________________________*/
+ /* AMBLIST clean up                                         */
+ drop sysprint.
+ "free fi(sysprint sysin ddn)"
+ x = msg("off")
+ address tso
+ "delete '"dsnprint"'"
+ x = msg(x)
+
+ return date' 'time' 'ssi
+ /*__________________________________________________________*/
+
+ jobname: procedure
+ parse arg dsn member .
+
+ /* Returns jobname from a program object,             */
+ /* otherwise string 'JOBNAME'.                        */
+
+ /* In a load module/program object, the jobname       */
+ /* may be in string                                   */
+ /* 'BATCH EMULATOR  JOB(xxxxxxxx) STEP(xxxxxxxx)'     */
+ /* written by the binder towards the end              */
+ /* or in the name of a temporay dataset input         */
+ /* to SYSLIN (e.g. &&LOADSET) after '.RA000.'         */
+ /* We try these two possibilities.                    */
+
+ "alloc f(dd1) da('"dsn"("member")') shr reu"
+ xrc = rc
+ if xrc <> 0 then do
+    parse source . . rexxname .
+    say    rexxname" could not allocate "dsn"  alloc rc = "xrc
+    return 'JOBNAME'
+ end /* if xrc <> 0                                    */
+
+ address mvs "execio * diskr dd1 (stem load. fini"
+ xrc = rc
+ if xrc <> 0 then do
+    parse source . . rexxname .
+    say    rexxname" could not read "dsn"  execio rc = "xrc
+    "free f(dd1)"
+    return 'JOBNAME'
+ end /* if xrc <> 0                                    */
+
+ string   = "EMULATOR  JOB("
+ lstring  = length(string)
+ string2  = ".RA000."    /* &&LOADSET often used       */
+ lstring2 = length(string2)
+ do i = load.0 to 1 by -1 /* scan backwards            */
+    pos = pos(string,load.i)
+    if pos > 0 then do
+       /* obtain 8 characters past string              */
+       job = substr(load.i,pos+lstring,8)
+       job = strip(job)
+       "free f(dd1)"
+       return job /*    *** normal return ***          */
+    end /* if pos > 0                                  */
+    else do /* try also characters after '.RA000.'     */
+      pos2 = pos(string2,load.i)
+      if pos2 > 0 then do
+         /* obtain 8 characters past string2           */
+         job = substr(load.i,pos2+lstring2,8)
+         /* replace dot by space and choose first word */
+         job = word(translate(job,' ','.'),1)
+         "free f(dd1)"
+         return job /*    *** normal return ***        */
+      end /* if pos2 > 0                               */
+    end /* try also characters after '.RA000.'         */
+ end /* do i = n to 1 by -1                            */
+
+ "free f(dd1)"
+ return 'JOBNAME' /* jobname not found                 */
+ /*_________________________________________________________________*/
+
+ luname: procedure
+ parse arg uid .
+ stem_name = outtrap('line.') /* lu output into a stem        */
+   lu uid
+   if rc <> 0 then return "LUNAME" /* name not obtained       */
+ outtrap_off = outtrap('off')
+
+ if datatype(line.0) = 'NUM' then do
+    if line.0 > 0 then do
+       parse var line.1 . 'NAME=' name 'OWNER=' .
+       if strip(name) = '' then return "LUNAME"
+       else return strip(name)     /*  *** normal return ***  */
+    end /* if line.0 > 0                                      */
+ end /* if datatype(line.0) = 'NUM'                           */
+
+ return "LUNAME"          /* name not obtained                */
+
+ /*___________________________________________________________*/
+ gregorian:
+ /* Converts Julian date "YYYYNNN" into "YYYYMMDD"            */
+ /* Thank you Harold Zbiegien                                 */
+ /* http://www.edm2.com/index.php                             */
+ /*      /Harold_Zbiegien%27s_date_algorithms_in_REXX         */
+ arg YYYY +4 NNN
+ if YYYY // 4 = 0 then LY = 1 ; else LY = 0
+ if YYYY // 100 = 0 then LY = 0
+ if YYYY // 400 = 0 then LY = 1 /* LY is 1 if it is a leap year */
+ WORK = NNN
+ if WORK > (59 + LY) then WORK = WORK + 2 - LY
+ MM = TRUNC(((WORK + 91) * 100) / 3055)
+ DD = (WORK + 91) - TRUNC((MM * 3055) / 100)
+ DD = RIGHT(DD,2,0)
+ MM = MM - 2
+ MM = RIGHT(MM,2,0)
+ return YYYY !! MM !! DD
+ /*___________________________________________________________*/
+ display_result:
+
+ /* Display in a POPUP panel:                                       */
+ /* dsn member linkedit date, time, SSI and                         */
+ /* if available, jobname and name corresponding to jobname.        */
+
+ address tso
+ uid    = sysvar('sysuid')         /* tso userid                    */
+ ddnm = 'dd'random(1,99999)        /* choose random ddname          */
+ x    = msg('off')
+ "alloc file("ddnm") unit(sysallda) new tracks space(1,1) delete",
+       " reuse lrecl(80) recfm(f b) blksize(3120) dir(1)"
+ x    = msg(x)
+ parse source . . rexxname .
+ "newstack"
+ /*************************/
+ /* panel source          */
+ /*************************/
+ queue ")panel keylist(isrspbc,isr)"
+ queue ')attr'
+ queue '  # type(input)  intens(high) caps(off)'
+ queue '  ? type(text)   intens(low)  skip(on) color(turquoise)'
+ queue ')body window(53,10)'
+ queue '?  '
+ queue "?                   Rexx "rexxname
+ queue '#dsn                                        #member'
+ queue '?                        '
+ queue '?Linkedit/binder date time:#date       #time'
+ queue '?                           YYYY/MM/DD'
+ queue '?SSI                      :#ssi'
+ queue '?Jobname                  :#job'
+ queue '?Name corresponding       :#name'
+ queue '?               '
+ queue ')init'
+ queue '.cursor  = name'
+ queue ')proc'
+ queue " if (.msg ^= ' ' )"
+ queue '    .msg  = &z'
+ queue ')end'
+ queue ""
+
+ address ispexec
+ "control errors return"
+ "lminit dataid(pan) ddname("ddnm")"
+ "lmopen dataid("pan") option(output)"
+ do queued()
+    parse pull panline
+    "lmput dataid("pan") mode(invar)" ,
+           "dataloc(panline) datalen(80)"
+ end
+ "lmmadd dataid("pan") member(lkpanel)"
+ "lmfree dataid("pan")"
+ address tso "delstack"
+
+ "libdef ispplib library id("ddnm") stack"
+ "addpop row(5) column(10)"            /* start popup window mode   */
+ "display panel(lkpanel)"              /* obtain parameters         */
+ xrc = rc                              /* rc = 8 if PF3 or PF4      */
+ "rempop"                              /* exit  popup window mode   */
+ "libdef ispplib"
+ address                               /* restore environment       */
+
+ x = msg('off')
+ "free fi("ddnm")"
+ x = msg(x)
+
+ if xrc = 8 then return                /* PF3 or PF4                */
+ if xrc > 8 then do
+    say 'display panel(lkpanel) rc = 'xrc
+ end /* if xrc > 8                                                  */
+
+ return
+ /*_________________________________________________________________*/
+
+  set_up_prefix:
+
+  /* Set up new output file prefix.                                 */
+  prefix = sysvar('syspref')           /* tso profile prefix        */
+  uid    = sysvar('sysuid')            /* tso userid                */
+  if prefix = '' then prefix = uid     /* use uid if null prefix    */
+  if prefix <> '' & prefix <> uid then /* different prefix than uid */
+     prefix = prefix'.'uid             /* use prefix.uid            */
+
+  return
+ /*_________________________________________________________________*/

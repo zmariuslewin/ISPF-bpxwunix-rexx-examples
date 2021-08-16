@@ -1,0 +1,268 @@
+/* rexx */
+ trace o
+
+ /* This rexx converts from a Julian date to a Gregorian date    */
+ /* or reverse.                                                  */
+ /* Examples of use:                                             */
+ /* Command ===> tso JULY               <-- will give examples   */
+ /* Command ===> tso JULY 2021/12/31                             */
+ /* Command ===> tso JULY 2021365                                */
+
+ /* Example of call by functional alias
+    member name: january
+    /* rexx january functional alias of july */
+    call july arg(1)
+    exit
+ */
+
+ parse source . . rexxname .
+ /* rexxname calling itself,                                    */
+ /* it must be different of inline called routines              */
+ /* gregorian and julian.                                       */
+
+ parse arg date .
+ date = strip(date)
+
+ /* if date = '' then use default                               */
+ extra = ''
+ if date = '' then do /* default is today's date (YYYYMMDD)     */
+    date = date('s')  /* YYYYMMDD format                        */
+    extra = 'Today:'
+ end /* if date = ''                                            */
+
+ l = length(date)
+
+ /* Check length.                                               */
+ /* NNN is the day number in year (quantieme)                   */
+ select /*         according to argument length                 */
+
+   when l = 1 then do /* assume NNN with current year missing   */
+     YYYYNNN = left(date('s'),4)'00'date
+     l2 = 7
+   end /* when l = 1                                            */
+
+   when l = 2 then do /* assume NNN with current year missing   */
+     YYYYNNN = left(date('s'),4)'0'date
+     l2 = 7
+   end /* when l = 2                                            */
+
+   when l = 3 then do /* assume NNN with current year missing   */
+     YYYYNNN = left(date('s'),4)!!date
+     l2 = 7
+   end /* when l = 3                                            */
+
+   when l = 5 then do /* assume YYNNN          (Julian date)    */
+     YYYYNNN = left(date('s'),2)!!date
+     l2 = 7
+   end /* when l = 5                                            */
+
+   when l = 7 then do /* assume YYYYNNN        (Julian date)    */
+     YYYYNNN  = date /* YYYYNNN                (Julian date)    */
+     l2 = 7
+   end /* when l = 7                                            */
+
+   when l = 8 then do /* assume YYYYMMDD       (Gregorian date) */
+     YYYYMMDD = date
+     l2 = 8
+   end /* when l = 8                                            */
+
+   when l = 10 then do /* assume YYYY/MM/DD    (Gregorian date) */
+     YYYYMMDD = left(date,4)!!substr(date,6,2)!!right(date,2)
+     l2 = 8
+   end /* when l = 10                                           */
+
+   otherwise do
+     say rexxname 'argument' date 'has wrong length.'
+     call show_examples /* recursive call with default          */
+     exit
+   end /* otherwise                                             */
+ end /* select     according to argument length                 */
+
+ /* Get gregorian date from julian date or reverse.             */
+ select /*         according to format length                   */
+   when l2 = 7 then do  /* assume YYYYNNN (Julian date)         */
+/* Please note:
+    Input dates given in 2-digit year formats (i.e. European, Julian, Ordered,
+    Usa) are interpreted as being within a 100 year window as calculated by:
+    (current_year - 50) = low end of window
+    (current_year + 49) = high end of window
+     YYYYMMDD = date('s',right(YYYYNNN,5),'j')
+*/
+     parse var YYYYNNN YYYY +4 NNN
+     if datatype(YYYYNNN) <> 'NUM' then do /* basic checks      */
+        say rexxname 'date' date 'is not numeric.'
+        call show_examples /* recursive call with default       */
+        exit
+     end /* if datatype(YYYYNNN) <> 'NUM'                       */
+     if NNN < 1 ! NNN > 366 then do
+        say rexxname 'argument' date 'has invalid',
+                     'number of days in year ->' NNN
+        call show_examples /* recursive call with default       */
+        exit
+     end /* if NNN < 1 ! NNN > 366                              */
+
+     da = gregorian(YYYYNNN)
+     parse var da YYYY +4 MM +2 DD /* split                     */
+     result1 = 'Julian' YYYYNNN '->',
+         'Gregorian' YYYY'/'MM'/'DD
+     result2 = '       YYYYNNN              YYYY/MM/DD'
+   end /* when l2 = 7      assume YYYYNNN (Julian date)         */
+
+   when l2 = 8 then do  /* assume YYYYMMDD (Gregorian date)     */
+     parse var YYYYMMDD YYYY +4 MM +2 DD
+     if datatype(YYYYMMDD) <> 'NUM' then do /* basic checks     */
+        say rexxname 'date' date 'is not numeric.'
+        call show_examples /* recursive call with default       */
+        exit
+     end /* if datatype(YYYYMMDD) <> 'NUM'                      */
+     if MM < 1 ! MM > 12 then do
+        say rexxname 'argument' date 'has invalid month' MM
+        call show_examples /* recursive call with default       */
+        exit
+     end /* MM < 1 ! MM > 12                                    */
+     if DD < 1 ! DD > 31 then do
+        say rexxname 'argument' date 'has invalid date' DD
+        call show_examples /* recursive call with default       */
+        exit
+     end /* if DD < 1 ! DD > 31                                 */
+     YYYYNNN = julian(YYYYMMDD)
+     result1 = 'Gregorian' date '-> Julian' YYYYNNN
+     if l = 8  then result2 = '          YYYYMMDD           YYYYNNN'
+     if l = 10 then result2 = '          YYYY/MM/DD           YYYYNNN'
+   end /* when l2 = 8      assume YYYYMMDD (Gregorian date)     */
+   otherwise nop
+ end /* select     according to format length                   */
+
+ /* Get calendar in stem out.                                   */
+ call bpxwunix 'cal 'MM' 'YYYY,,out.
+ /*
+ if datatype(out.0) = 'NUM' then
+    do i = 1 to out.0; say out.i; end
+ */
+
+ /* show how to use:                                            */
+ use1 = "Examples of use:"
+ use2 = "Command ===> tso "rexxname" 2021/12/31"
+ use3 = "Command ===> tso "rexxname" 2021365"
+
+ call display_result
+
+ exit
+ /*_____________________________________________________________*/
+ gregorian:
+ /* Converts Julian date "YYYYNNN" into "YYYYMMDD"              */
+ /* Thank you Harold Zbiegien                                   */
+ /* http://www.edm2.com/index.php                               */
+ /*      /Harold_Zbiegien%27s_date_algorithms_in_REXX           */
+ arg YYYY +4 NNN
+ if YYYY // 4 = 0 then LY = 1 ; else LY = 0
+ if YYYY // 100 = 0 then LY = 0
+ if YYYY // 400 = 0 then LY = 1 /* LY is 1 if it is a leap year */
+ WORK = NNN
+ if WORK > (59 + LY) then WORK = WORK + 2 - LY
+ MM = TRUNC(((WORK + 91) * 100) / 3055)
+ DD = (WORK + 91) - TRUNC((MM * 3055) / 100)
+ DD = RIGHT(DD,2,0)
+ MM = MM - 2
+ MM = RIGHT(MM,2,0)
+ return YYYY !! MM !! DD
+ /*_____________________________________________________________*/
+ julian:
+ /* Converts Gregorian date "YYYYMMDD"                          */
+ /* into Julian date "YYYYMMDD"                                 */
+ /* Thank you Harold Zbiegien                                   */
+ arg YYYY +4 MM +2 DD
+ if YYYY // 4 = 0 then LY = 1 ; else LY = 0
+ if YYYY // 100 = 0 then LY = 0
+ if YYYY // 400 = 0 then LY = 1 /* LY is 1 if it is a leap year */
+ NNN = TRUNC(((MM + 2) * 3055) / 100) + DD - 91
+ if NNN > (59 + LY) then NNN = NNN - 2 + LY
+ return YYYY!!RIGHT(NNN,3,0)
+ /*_____________________________________________________________*/
+ display_result:
+
+ /* Display result in a POPUP panel.                                */
+
+ address tso
+ uid    = sysvar('sysuid')         /* tso userid                    */
+ ddnm = 'dd'random(1,99999)        /* choose random ddname          */
+ x    = msg('off')
+ "alloc file("ddnm") unit(sysallda) new tracks space(1,1) delete",
+       " reuse lrecl(80) recfm(f b) blksize(3120) dir(1)"
+ x    = msg(x)
+ parse source . . rexxname .
+ "newstack"
+ /*************************/
+ /* panel source          */
+ /*************************/
+ queue ")panel keylist(isrspbc,isr)"
+ queue ')attr'
+ queue ' # type(input)  intens(high) caps(off) just(asis) color(yellow)'
+ queue ' µ type(input)  intens(high) caps(off) just(asis) color(blue)'
+ queue ' % type(input)  intens(high) caps(off) color(turquoise)'
+ queue ' ? type(text)   intens(low)  skip(on) color(turquoise)'
+ queue ')body window(40,16)'
+ queue "?             Rexx "rexxname
+ queue '#extra'
+ queue '#result1'
+ queue '#result2'
+ queue '?'
+ queue 'µout.1'
+ queue 'µout.2'
+ queue 'µout.3'
+ queue 'µout.4'
+ queue 'µout.5'
+ queue 'µout.6'
+ queue 'µout.7'
+ queue 'µout.8'
+ queue '%use1'
+ queue '%use2'
+ queue '%use3'
+ queue ')init'
+ queue '.cursor  = use3'
+ queue ')proc'
+ queue " if (.msg ^= ' ' )"
+ queue '    .msg  = &z'
+ queue ')end'
+ queue ""
+
+ address ispexec
+ "control errors return"
+ "lminit dataid(pan) ddname("ddnm")"
+ "lmopen dataid("pan") option(output)"
+ do queued()
+    parse pull panline
+    "lmput dataid("pan") mode(invar)" ,
+           "dataloc(panline) datalen(80)"
+ end
+ "lmmadd dataid("pan") member(pan01)"
+ "lmfree dataid("pan")"
+ address tso "delstack"
+
+ "libdef ispplib library id("ddnm") stack"
+ /* address tso "ispdptrc"                                          */
+ "addpop row(4) column(18)"            /* start popup window mode   */
+ "display panel(pan01)"                /* obtain parameters         */
+ xrc = rc                              /* rc = 8 if PF3 or PF4      */
+ "rempop"                              /* exit  popup window mode   */
+ /* address tso "ispdptrc"                                          */
+ "libdef ispplib"
+ address                               /* restore environment       */
+
+ x = msg('off')
+ "free fi("ddnm")"
+ x = msg(x)
+
+ if xrc = 8 then return                /* PF3 or PF4                */
+ if xrc > 8 then do
+    say 'display panel(pan01) rc = 'xrc
+ end /* if xrc > 8                                                  */
+
+ return
+ /*_________________________________________________________________*/
+ show_examples:
+     zedsmsg = 'Check examples' /* at top right of next screen  */
+     "ispexec setmsg msg(isrz000)"
+     interpret "call "rexxname  /* use today's date to show examples */
+     return
+ /*_________________________________________________________________*/
