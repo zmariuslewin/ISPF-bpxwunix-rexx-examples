@@ -1,0 +1,120 @@
+//USER1A   JOB ...
+/*JOBPARM  LINES=999,BYTES=99999,PAGES=99999
+//*________________________________________________________________*
+//*
+//*        JCL example to copy a PDS or a PDSE to a PDSE
+//*        changing optionnally
+//*        the primary and secondary allocations
+//*        then renaming.
+//*        The old library is renamed in
+//*        (old name).SAVE.J&LYYMMDD   year month day
+//*
+//*        Exclusive access when renaming the old library
+//*________________________________________________________________*
+//*        Example of use:
+//*
+//*        EXEC L2,DSN=ABC.LIB1
+//*        Default SPACE allocations for new PDSE
+//*
+//*        EXEC L2,DSN=ABC.LIB2,ADDPARM=','
+//*        Use a primary allocation of 21 CYL and
+//*        a secondary allocation of 21 CYL
+//*
+//*        EXEC L2,DSN=ABC.LIB3,ADDPARM=',',PRIM=146,SECOND=30
+//*        Use a primary allocation of 146 CYL and
+//*        a secondary allocation of 30 CYL
+//*________________________________________________________________*
+//*
+//LIKELIB  PROC LIKE=,DSN=,
+//         ADDPARM=' ', Do not add an extra SPACE parameter
+//*        ADDPARM=',', Add an extra SPACE parameter
+//         PRIM=,       New primary allocation in CYL
+//         SECOND=      New secondary allocation in CYL
+//*
+//DEL   EXEC PGM=IEFBR14
+//DEL      DD DISP=(MOD,DELETE,DELETE),SPACE=(TRK,0),
+//            DSN=&DSN
+//*
+//DEF   EXEC PGM=IEFBR14
+//DEF      DD DISP=(,CATLG),DSN=&DSN,
+//            UNIT=(SYSALLDA,1),
+//            LIKE=&LIKE,
+//            DSORG=PO,DSNTYPE=(LIBRARY,2),
+//            EATTR=OPT&ADDPARM.SPACE=(CYL,(&PRIM,&SECOND,800))
+//* &ADDPARM. contains either ' ' (default: disregards what follows)
+//*                    or     ',' (take into account what follows)
+//* 800, number of directory blocks for a PDS, is not used
+//*
+//LIKELIB  PEND
+//*________________________________________________________________*
+//*
+//COPYLIB  PROC DSNIN=,DSNOUT=
+//*
+//IEBCOPY  EXEC PGM=IEBCOPY,PARM=COPYMOD Generate COPYMOD
+//SYSPRINT DD SYSOUT=*
+//SYSUT3   DD UNIT=SYSDA,SPACE=(CYL,(5,5))
+//SYSUT4   DD UNIT=SYSDA,SPACE=(CYL,(5,5))
+//SYSUT1   DD DISP=SHR,DSN=&DSNIN
+//SYSUT2   DD DISP=SHR,DSN=&DSNOUT
+//COPYLIB  PEND
+//*________________________________________________________________*
+//*
+//L2       PROC DSN=,
+//         ADDPARM=' ', Do not add an extra SPACE parameter
+//*                     and use default allocations
+//*        ADDPARM=',', Add an extra SPACE parameter
+//         PRIM=21,     New primary allocation in CYL
+//         SECOND=21    New secondary allocation in CYL
+//*
+//* Principle:
+//* Define DSNL2 like DSN
+//* Copy   DSN to DSNL2
+//* Rename DSN to DSNANC  (Exclusive access to DSN)
+//* Rename DSNL2 to DSN
+//* Stop at first problem
+//* Any case: DSN or DSNANC is the old library (not destroyed)
+//*
+//         EXPORT SYMLIST=*
+//         SET DSN=&DSN
+//         SET DSNL2=&DSN..L2
+//*
+//*        SET DSNANC=&DSN..SAVE.J&LYYMMDD
+//* Commented out because class may not allow system symbols in JCL
+//*
+//         SET QUOTE=''''
+//DEFL2    EXEC LIKELIB,LIKE=&DSN,DSN=&DSNL2,
+//         ADDPARM=&QUOTE&ADDPARM&QUOTE,PRIM=&PRIM,SECOND=&SECOND
+//*
+//* Structure: Imbricated IFs
+//*        IF DEFL2.DEF.RC          EQ 0 THEN copy to DSNL2
+//*           IF COPY2L2.IEBCOPY.RC EQ 0 THEN rename DSN to DSNANC
+//*              IF  ANC.RC         EQ 0 THEN rename DSNL2 to DSN
+//*
+//         IF DEFL2.DEF.RC          EQ 0 THEN
+//COPY2L2  EXEC COPYLIB,DSNIN=&DSN,DSNOUT=&DSNL2
+//         IF COPY2L2.IEBCOPY.RC    EQ 0 THEN
+//ANC      EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *,SYMBOLS=EXECSYS
+  ALTER &DSN NEWNAME(&DSN..SAVE.J&LYYMMDD)
+//         IF ANC.RC                EQ 0 THEN
+//RENAMEL2 EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *,SYMBOLS=EXECSYS
+  ALTER &DSNL2 NEWNAME(&DSN)
+//         ENDIF ANC.RC             EQ 0
+//         ENDIF COPY2L2.IEBCOPY.RC EQ 0
+//         ENDIF DEFL2.DEF.RC       EQ 0
+//L2       PEND
+//*________________________________________________________________*
+//*
+//*    EXEC L2,DSN=ABC.LIB1           Default SPACE allocations
+//*
+//*    EXEC L2,DSN=ABC.LIB2,ADDPARM=','
+//*    Use a primary allocation of 21 CYL and
+//*    a secondary allocation of 21 CYL
+//*
+//     EXEC L2,DSN=ABC.LIB3,ADDPARM=',',PRIM=146,SECOND=30
+//*    Use a primary allocation of 146 CYL and
+//*    a secondary allocation of 30 CYL
+//*    (I would avoid a zero secondary allocation)
