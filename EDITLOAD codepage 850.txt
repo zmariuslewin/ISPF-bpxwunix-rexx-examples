@@ -1,0 +1,257 @@
+/* rexx */
+trace o
+
+/*________________________________________________________________*/
+/*                                                                */
+/* ISPF edit of a load module/program object.                     */
+/* There should be no change in record sizes.                     */
+/*                                                                */
+/* Kindly note:                                                   */
+/* The original load module/program object is not saved.          */
+/* The original load module/program object is always replaced     */
+/* even if there are no changes.                                  */
+/* Please save and test carefully.                                */
+/*                                                                */
+/* Use of this rexx is at your own risk.                          */
+/* There is no guarantee or warranty of any kind expressed or     */
+/* implied.                                                       */
+/*________________________________________________________________*/
+
+   /* Examples of use:
+
+   1) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   editload_ MEMBER1                            000086A8
+   _________ MEMBER2                            00008E80
+
+   2) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> tso editload 'ABC.LOAD(MEMBER1)'
+
+   3) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   editload_ MEMBER1   M1 DEF                   000086A8
+   _________ MEMBER2                            00008E80
+
+   Change all 'ABC' by 'DEF'
+   Content of edit macro M1:
+   /* rexx */
+   address isredit
+   "macro (parm)"
+   "c ABC "parm" all"
+   "save"
+   "end"
+   exit
+
+   4) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> tso editload 'ABC.LOAD(MEMBER1)' M1 DEF
+
+   5) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> cmde
+   Enter TSO commands below:
+   ===> editload 'ABC.LOAD(MEMBER1)' M1 DeF
+   (for case sensitivity)
+
+   6) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   editload_ MEMBER1   hex                      000086A8
+   _________ MEMBER2                            00008E80
+
+   */
+
+parse arg dsn macro parm
+/* macro and parm for macro optional                        */
+dsn = strip(dsn,,"'")                /* remove surrounding quotes */
+parse var dsn dsn '(' member ')' .   /* extract member if present */
+/* member will be edited via a sequential dataset dsnseq    */
+/* obtained by IEBCOPY                                      */
+dsnseq = dsn"."member".SEQ" /* temporary file to be edited  */
+                            /* which will replace member    */
+/*__________________________________________________________*/
+/*                  SUMMARY                                 */
+/* 1) Unload member as a sequential file with IEBCOPY       */
+/* 2) Allocate the sequential file with RECFM=V             */
+/* 3) Edit the sequential file in place                     */
+/*    (no shortening or lengthening of records)             */
+/* 4) Allocate the sequential file with RECFM=VS            */
+/* 5) Load member from sequential file with IEBCOPY         */
+/*__________________________________________________________*/
+
+/*__________________________________________________________*/
+
+/* 1) Unload member to a sequential file with IEBCOPY       */
+
+/* Allocate input file I                                    */
+"alloc f(i) da('"dsn"') shr reu"
+  call check_rc rc,0,
+   "Unload step. Input dataset "dsn" allocation."
+
+/* Allocate output file ddseq                               */
+xmsg = msg(off)
+  "free dd(ddseq)"
+  "del '"dsnseq"'"
+xmsg = msg(xmsg)
+"alloc f(ddseq) da('"dsnseq"') reu",
+"unit(sysallda) tr sp(15 15)"
+  call check_rc rc,0,
+   "Unload step. Output dataset "dsnseq" allocation."
+
+/* Allocate SYSPRINT file                                   */
+"alloc f(sysprint) da(*) reu"
+/* "alloc f(sysprint) dummy reu"                            */
+  call check_rc rc,0,
+   "Unload step. SYSPRINT allocation."
+
+/* Allocate SYSUT3 file                                     */
+"alloc f(sysut3) unit(sysallda) cyl sp(5 5) reu"
+  call check_rc rc,0,
+   "Unload step. SYSUT3 allocation."
+
+/* Allocate SYSUT4 file                                     */
+"alloc f(sysut4) unit(sysallda) cyl sp(5 5) reu"
+  call check_rc rc,0,
+   "Unload step. SYSUT4 allocation."
+
+/* Build SYSIN control card                                 */
+"newstack"
+queue " COPY I=I,O=DDSEQ"
+/* queue " COPYMOD I=I,O=DDSEQ0"  <- Ok for PDSE            */
+queue " S M="member
+"alloc f(sysin) unit(sysallda) tr sp(1) recfm(f) lrecl(80) reu"
+address mvs "execio" queued() "diskw sysin (fini"
+"delstack"
+
+"call *(iebcopy)"
+
+unload_clean_up:
+"free f(sysin sysprint sysut3 sysut4 i)"
+
+/*__________________________________________________________*/
+
+/* 2) Allocate unload dataset as                            */
+/*    RECFM=V,LRECL=32756,BLKSIZE=32760 instead of          */
+/*    RECFM=VS,LRECL=32760,BLKSIZE=32760                    */
+
+"alloc f(ddseq) da('"dsnseq"') shr reu",
+"recfm(v) lrecl(32756) blksize(32760)"
+  call check_rc rc,0,
+   "Output sequential dataset allocate with RECFM=V"
+
+/*__________________________________________________________*/
+
+/* 3) Edit sequential dataset with RECFM=V                  */
+/*    with no change in record sizes                        */
+
+address ispexec
+"control errors return"
+
+"lminit dataid(dd1) ddname(ddseq) enq(shr)"
+  call check_rc rc,0,"lminit"
+
+parse source . . rexxname . /* rexxname in upper case       */
+zedsmsg = rexxname          /* displayed top right          */
+"setmsg msg(isrz000)"
+
+if macro = "" then do
+   macro = "res"        /* res: RESET command               */
+   parm  = ""
+end /* if macro = ""                                        */
+"edit dataid("dd1") macro("macro") parm(parm)"
+/* macro accesses parm thru e.g. "isredit macro (parm)"     */
+  call check_rc rc,4,"edit"
+
+"lmfree dataid("dd1")"
+  call check_rc rc,0,"lmfree"
+
+address /* from ispexec                                     */
+
+/*__________________________________________________________*/
+
+/* 4) Allocate unload dataset as                            */
+/*    RECFM=VS,LRECL=32760,BLKSIZE=32760 instead of         */
+/*    RECFM=V,LRECL=32756,BLKSIZE=32760                     */
+
+"alloc f(ddseq) da('"dsnseq"') shr reu",
+"recfm(v s) lrecl(32760) blksize(32760)"
+  call check_rc rc,0,
+   "Input sequential dataset allocate with RECFM=VS"
+
+/*__________________________________________________________*/
+
+/* 5) Load member from sequential file with replacement     */
+/*    with IEBCOPY                                          */
+
+/* Allocate output file O                                   */
+"alloc f(o) da('"dsn"') shr reu "
+  call check_rc rc,0,
+   "Load step. Output dataset "dsn" allocation."
+
+/* Allocate SYSPRINT file                                   */
+"alloc f(sysprint) da(*) reu"
+  call check_rc rc,0,
+   "Load step. SYSPRINT allocation."
+
+/* Allocate SYSUT3 file                                     */
+"alloc f(sysut3) unit(sysallda) cyl sp(5 5) reu"
+  call check_rc rc,0,
+   "Load step. SYSUT3 allocation."
+
+/* Allocate SYSUT4 file                                     */
+"alloc f(sysut4) unit(sysallda) cyl sp(5 5) reu"
+  call check_rc rc,0,
+   "Load step. SYSUT4 allocation."
+
+/* Build SYSIN control card                                 */
+"newstack"
+queue " COPY I=DDSEQ,O=O"
+queue " S M=(("member",,R))"            /* with replacement */
+"alloc f(sysin) unit(sysallda) tr sp(1) recfm(f) lrecl(80) reu"
+address mvs "execio" queued() "diskw sysin (fini"
+"delstack"
+
+"call *(iebcopy)"
+
+load_clean_up:
+"free f(sysin sysprint sysut3 sysut4 o)"
+xmsg = msg(off)
+  "free dd(ddseq)"
+  "del '"dsnseq"'"
+xmsg = msg(xmsg)
+
+exit
+
+/*__________________________________________________________*/
+check_rc:
+trace_previous = trace("o") /* no trace                     */
+
+ /* call example:    call check_rc rc,0,'libdef isptlib'    */
+ /* In case of error:
+ ZEDMSGNO (message identifier), ZEDISMSG (short message text) and ZEDILMSG
+ */
+ if arg(1)<=arg(2) then do
+    return
+    trace(trace_previous)
+ end /* if arg(1)<=arg(2)                                   */
+ /* ISPEXEC or ISREDIT error:                               */
+ if ZERRSM   <> 'ZERRSM'   then say 'ZERRSM   = 'ZERRSM
+ if ZERRLM   <> 'ZERRLM'   then say 'ZERRLM   = 'ZERRLM
+ if ZEDMSGNO <> 'ZEDMSGNO' then say 'ZEDMSGNO = 'ZEDMSGNO
+ if ZEDISMSG <> 'ZEDISMSG' then say 'ZEDISMSG = 'ZEDISMSG
+ if ZEDILMSG <> 'ZEDILMSG' then say 'ZEDILMSG = 'ZEDILMSG
+ say 'rc = 'arg(1)
+ if debug='DEBUG' then do
+   say arg(3) 'RC='arg(1)
+   if zerrmsg <> '' & zerrmsg <> 'ZERRMSG' then say 'ZERRMSG='zerrmsg
+ end /* if debug='DEBUG'                                    */
+ zispfrc = 16
+ if sysvar(sysispf) = 'ACTIVE' then address ispexec "vput zispfrc"
+ exit zispfrc
+/*__________________________________________________________*/
