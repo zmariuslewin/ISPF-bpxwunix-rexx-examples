@@ -1,0 +1,164 @@
+/* rexx */
+trace o
+
+/*________________________________________________________________*/
+/*                                                                */
+/* ISPF view of a load module/program object.                     */
+/* The library member is viewed as a RECFM=V file,                */
+/* which allows edit macros.                                      */
+/*________________________________________________________________*/
+
+   /* Examples of use:
+
+   1) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   viewload_ MEMBER1                            000086A8
+   _________ MEMBER2                            00008E80
+
+   2) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> tso viewload 'ABC.LOAD(MEMBER1)'
+
+   3) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   viewload_ MEMBER1   M1 DEF                   000086A8
+   _________ MEMBER2                            00008E80
+
+   Show all lines with DEF
+   Content of edit macro M1:
+   /* rexx */
+   address isredit
+   "macro (parm)"
+   "x all"
+   "f '"parm"' all"
+   exit
+
+   4) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> tso viewload 'ABC.LOAD(MEMBER1)' M1 DEF
+
+   5) On the command line:
+   VIEW              ABC.LOAD
+   Command ===> cmde
+   Enter TSO commands below:
+   ===> viewload 'ABC.LOAD(MEMBER1)' M1 DeF
+   (for case sensitivity)
+
+   6) In a member list:
+   VIEW              ABC.LOAD
+   Command ===>
+              Name     Prompt        Alias-of     Size
+   viewload_ MEMBER1   hex                      000086A8
+   _________ MEMBER2                            00008E80
+
+   */
+
+parse arg dsn macro parm
+/* macro and parm for macro optional                        */
+dsn = strip(dsn,,"'")       /* remove surrounding quotes    */
+/* member will be viewed via a sequential dataset dsnseq    */
+dsnseq = translate(dsn,'..','()')"SEQ"
+/* if dsn    = "ABC.LOAD(MBR1)"     then                    */
+/*    dsnseq = "ABC.LOAD.MBR1.SEQ"                          */
+/* dsnseq is the temporary file to be viewed                */
+/*__________________________________________________________*/
+/*                  SUMMARY                                 */
+/* 1) Copy member to a RECFM=V sequential file              */
+/* 2) View the sequential file                              */
+/*__________________________________________________________*/
+
+/*__________________________________________________________*/
+
+/* 1) Copy member to a RECFM=V sequential file              */
+/*    with IDCAMS REPRO                                     */
+
+/* Allocate input file IN                                   */
+"alloc f(in) da('"dsn"') shr reu"
+  call check_rc rc,0,
+   "Input dataset "dsn" allocation."
+
+/* Allocate output file ddseq                               */
+xmsg = msg(off)
+  "free dd(ddseq)"
+  "del '"dsnseq"'"
+xmsg = msg(xmsg)
+"alloc f(ddseq) da('"dsnseq"') reu",
+"unit(sysallda) tr sp(15 15)",
+"recfm(v) lrecl(32756) blksize(32760)"
+  call check_rc rc,0,
+   "Output dataset "dsnseq" allocation."
+
+/* Repro input file to output file                          */
+/* RECFM=U to RECFM=V                                       */
+xmsg = msg(off)
+"repro ifile(in) ofile(ddseq)"
+repro_rc = rc
+xmsg = msg(xmsg)
+  call check_rc repro_rc,0,
+   "Repro of "dsn" to "dsnseq"."
+/*__________________________________________________________*/
+
+/* 2) View RECFM=V sequential dataset                       */
+
+address ispexec
+"control errors return"
+
+"lminit dataid(dd1) ddname(ddseq) enq(shr)"
+  call check_rc rc,0,"lminit"
+
+parse source . . rexxname . /* rexxname in upper case       */
+zedsmsg = rexxname          /* displayed top right          */
+"setmsg msg(isrz000)"
+
+if macro = "" then do
+   macro = "res"        /* res: RESET command               */
+   parm  = ""
+end /* if macro = ""                                        */
+"view dataid("dd1") macro("macro") parm(parm)"
+/* macro accesses parm thru e.g. "isredit macro (parm)"     */
+  call check_rc rc,4,"view"
+
+"lmfree dataid("dd1")"
+  call check_rc rc,0,"lmfree"
+
+address /* from ispexec                                     */
+
+clean_up:
+xmsg = msg(off)
+  "free f(ddseq)"
+  "del '"dsnseq"'"
+xmsg = msg(xmsg)
+
+exit
+
+/*__________________________________________________________*/
+check_rc:
+trace_previous = trace("o") /* no trace                     */
+
+ /* call example:    call check_rc rc,0,'libdef isptlib'    */
+ /* In case of error:
+ ZEDMSGNO (message identifier), ZEDISMSG (short message text) and ZEDILMSG
+ */
+ if arg(1)<=arg(2) then do
+    return
+    trace(trace_previous)
+ end /* if arg(1)<=arg(2)                                   */
+ /* ISPEXEC or ISREDIT error:                               */
+ if ZERRSM   <> 'ZERRSM'   then say 'ZERRSM   = 'ZERRSM
+ if ZERRLM   <> 'ZERRLM'   then say 'ZERRLM   = 'ZERRLM
+ if ZEDMSGNO <> 'ZEDMSGNO' then say 'ZEDMSGNO = 'ZEDMSGNO
+ if ZEDISMSG <> 'ZEDISMSG' then say 'ZEDISMSG = 'ZEDISMSG
+ if ZEDILMSG <> 'ZEDILMSG' then say 'ZEDILMSG = 'ZEDILMSG
+ say 'rc = 'arg(1)
+ if debug='DEBUG' then do
+   say arg(3) 'RC='arg(1)
+   if zerrmsg <> '' & zerrmsg <> 'ZERRMSG' then say 'ZERRMSG='zerrmsg
+ end /* if debug='DEBUG'                                    */
+ zispfrc = 16
+ if sysvar(sysispf) = 'ACTIVE' then address ispexec "vput zispfrc"
+ exit zispfrc
+/*__________________________________________________________*/
