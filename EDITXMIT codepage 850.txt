@@ -3,11 +3,11 @@ trace o
 
 /*________________________________________________________________*/
 /*                                                                */
-/* Edit a library or a library member thru its IEBCOPY UNLOADed   */
-/* form.                                                          */
-/* There should be no change in record sizes.                     */
+/* Edit a library or a library member thru its XMITed form        */
+/* with no change of record sizes.                                */
 /* Input library may have fixed, variable and undefined           */
 /* record formats.                                                */
+/* XMIT and RECEIVE are using IEBCOPY UNLOAD "under the hood"     */
 /* This rexx was at first designed to edit a                      */
 /* load module/program object, then was extended.                 */
 
@@ -25,7 +25,7 @@ trace o
 
    Command - Enter "/" to select actio
    -----------------------------------
-   editload ABC.LOAD           <-- process all library
+   editxmit ABC.LOAD           <-- process all library
 
    2) In ISPF 3.4:
    DSLIST - Data Sets Matching ABC
@@ -33,25 +33,25 @@ trace o
 
    Command - Enter "/" to select actio
    -----------------------------------
-   editload / M1 XYZ  <-- process all library with macro M1
+   editxmit / M1 XYZ  <-- process all library with macro M1
                           and macro parameter XYZ
 
    3) In a member list:
    VIEW              ABC.LOAD
    Command ===>
               Name     Prompt        Alias-of     Size
-   editload_ MEMBER1                            000086A8
+   editxmit_ MEMBER1                            000086A8
    _________ MEMBER2                            00008E80
 
    4) On the command line:
    VIEW              ABC.LOAD
-   Command ===> tso editload 'ABC.LOAD(MEMBER1)'
+   Command ===> tso editxmit 'ABC.LOAD(MEMBER1)'
 
    5) In a member list:
    VIEW              ABC.LOAD
    Command ===>
               Name     Prompt        Alias-of     Size
-   editload_ MEMBER1   M1 DEF                   000086A8
+   editxmit_ MEMBER1   M1 DEF                   000086A8
    _________ MEMBER2                            00008E80
 
    Change all 'ABC' by 'DEF'
@@ -66,20 +66,20 @@ trace o
 
    6) On the command line:
    VIEW              ABC.LOAD
-   Command ===> tso editload 'ABC.LOAD(MEMBER1)' M1 DEF
+   Command ===> tso editxmit 'ABC.LOAD(MEMBER1)' M1 DEF
 
    7) On the command line:
    VIEW              ABC.LOAD
    Command ===> cmde
    Enter TSO commands below:
-   ===> editload 'ABC.LOAD(MEMBER1)' M1 DeF
+   ===> editxmit 'ABC.LOAD(MEMBER1)' M1 DeF
    (for case sensitivity)
 
    8) In a member list:
    VIEW              ABC.LOAD
    Command ===>
               Name     Prompt        Alias-of     Size
-   editload_ MEMBER1   hex                      000086A8
+   editxmit_ MEMBER1   hex                      000086A8
    _________ MEMBER2                            00008E80
 
    */
@@ -93,17 +93,14 @@ if member = '' then dsnseq = dsn".SEQ"
                else dsnseq = dsn"."member".SEQ"
 /*__________________________________________________________*/
 /*                  SUMMARY                                 */
-/* 1) Unload as a sequential file with IEBCOPY              */
-/* 2) Allocate the sequential file with RECFM=V             */
-/* 3) Edit the sequential file in place                     */
-/*    (no shortening or lengthening of records)             */
-/* 4) Allocate the sequential file with RECFM=VS            */
-/* 5) Load from sequential file with IEBCOPY                */
+/* 1) Unload as a sequential file with XMIT                 */
+/* 2) Edit the sequential file in place                     */
+/* 3) Load from sequential file with RECEIVE                */
 /*__________________________________________________________*/
 
 /*__________________________________________________________*/
 
-/* 1) Unload to a sequential file with IEBCOPY              */
+/* 1) Unload to a sequential file with XMIT                 */
 
 /* Allocate input file I                                    */
 "alloc f(i) da('"dsn"') shr reu"
@@ -116,55 +113,21 @@ xmsg = msg(off)
   "del '"dsnseq"'"
 xmsg = msg(xmsg)
 "alloc f(ddseq) da('"dsnseq"') reu",
-"unit(sysallda) tr sp(15 15)"
+"unit(sysallda) tr sp(15 150) recfm(f b) lrecl(80) blksize(3120)"
   call check_rc rc,0,
    "Unload step. Output dataset "dsnseq" allocation."
 
-/* Allocate SYSPRINT file                                   */
-"alloc f(sysprint) da(*) reu"
-/* "alloc f(sysprint) dummy reu"                            */
-  call check_rc rc,0,
-   "Unload step. SYSPRINT allocation."
-
-/* Allocate SYSUT3 file                                     */
-"alloc f(sysut3) unit(sysallda) cyl sp(5 5) reu"
-  call check_rc rc,0,
-   "Unload step. SYSUT3 allocation."
-
-/* Allocate SYSUT4 file                                     */
-"alloc f(sysut4) unit(sysallda) cyl sp(5 5) reu"
-  call check_rc rc,0,
-   "Unload step. SYSUT4 allocation."
-
-/* Build SYSIN control card                                 */
-"newstack"
-queue " COPY I=I,O=DDSEQ"
-/* queue " COPYMOD I=I,O=DDSEQ0"  <- Ok for PDSE            */
-if member <> '' then queue " S M="member
-"alloc f(sysin) unit(sysallda) tr sp(1) recfm(f) lrecl(80) reu"
-address mvs "execio" queued() "diskw sysin (fini"
-"delstack"
-
-"call *(iebcopy)"
+if member = '' then mem = ''
+               else mem = "mem("member")"
+"xmit a.b fi(i) "mem,
+"outf(ddseq) nolog noprolog noepilog nonotify nowarn"
 
 unload_clean_up:
-"free f(sysin sysprint sysut3 sysut4 i)"
+"free f(i)"
 
 /*__________________________________________________________*/
 
-/* 2) Allocate unload dataset as                            */
-/*    RECFM=V,LRECL=32756,BLKSIZE=32760 instead of          */
-/*    RECFM=VS,LRECL=32760,BLKSIZE=32760                    */
-
-"alloc f(ddseq) da('"dsnseq"') shr reu",
-"recfm(v) lrecl(32756) blksize(32760)"
-  call check_rc rc,0,
-   "Output sequential dataset allocate with RECFM=V"
-
-/*__________________________________________________________*/
-
-/* 3) Edit sequential dataset with RECFM=V                  */
-/*    with no change in record sizes                        */
+/* 2) Edit sequential dataset                               */
 
 address ispexec
 "control errors return"
@@ -191,17 +154,6 @@ address /* from ispexec                                     */
 
 /*__________________________________________________________*/
 
-/* 4) Allocate unload dataset as                            */
-/*    RECFM=VS,LRECL=32760,BLKSIZE=32760 instead of         */
-/*    RECFM=V,LRECL=32756,BLKSIZE=32760                     */
-
-"alloc f(ddseq) da('"dsnseq"') shr reu",
-"recfm(v s) lrecl(32760) blksize(32760)"
-  call check_rc rc,0,
-   "Input sequential dataset allocate with RECFM=VS"
-
-/*__________________________________________________________*/
-
 say "Please type "y" or "Y" to confirm updating the original file."
 say "Any other answer will not update."
 say "This rexx does not save the original file."
@@ -216,47 +168,20 @@ if answer <> 'Y' then do
    say "No update."
    exit
 end /* if answer <> 'Y'                                     */
+
 /*__________________________________________________________*/
 
-/* 5) Load from sequential file with replacement            */
-/*    with IEBCOPY                                          */
-
-/* Allocate output file O                                   */
-"alloc f(o) da('"dsn"') shr reu "
-  call check_rc rc,0,
-   "Load step. Output dataset "dsn" allocation."
-
-/* Allocate SYSPRINT file                                   */
-"alloc f(sysprint) da(*) reu"
-  call check_rc rc,0,
-   "Load step. SYSPRINT allocation."
-
-/* Allocate SYSUT3 file                                     */
-"alloc f(sysut3) unit(sysallda) cyl sp(5 5) reu"
-  call check_rc rc,0,
-   "Load step. SYSUT3 allocation."
-
-/* Allocate SYSUT4 file                                     */
-"alloc f(sysut4) unit(sysallda) cyl sp(5 5) reu"
-  call check_rc rc,0,
-   "Load step. SYSUT4 allocation."
-
-/* Build SYSIN control card                                 */
+/* 3) Load from sequential file with replacement            */
+/*    with RECEIVE                                          */
 "newstack"
-/* Copy with replacement.                                   */
-if member = '' then queue " COPY I=((DDSEQ,R)),O=O"
-               else do /* member <> ''                      */
-                    queue " COPY I=DDSEQ,O=O"
-                    queue " S M=(("member",,R))"
-               end     /* member <> ''                      */
-"alloc f(sysin) unit(sysallda) tr sp(1) recfm(f) lrecl(80) reu"
-address mvs "execio" queued() "diskw sysin (fini"
+/* indicate receiving dataset and its disposition           */
+queue "ds('"dsn"') shr"
+/* nullfile: do not write on userid.LOG.MISC                */
+prompt_prev = prompt("on")
+"receive inf(ddseq) logda(nullfile)"
 "delstack"
 
-"call *(iebcopy)"
-
 load_clean_up:
-"free f(sysin sysprint sysut3 sysut4 o)"
 xmsg = msg(off)
   "free dd(ddseq)"
   "del '"dsnseq"'"
