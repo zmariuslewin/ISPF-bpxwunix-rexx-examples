@@ -1,0 +1,103 @@
+ /* rexx */
+ trace o
+
+ /* Extract interactively source information from                 */
+ /*         a program object of a COBOL program                   */
+ /*         compiled with TEST(DWARF,SOURCE)                      */
+
+ parse source . . rexxname .
+ say "                                           "
+ say "Example of use on the command line:        "
+ say "  Command ===> tso "rexxname" mylib(cobol01) "
+ say "Example of use in a member list, before a member name:"
+ say "  "rexxname" COBOL01                       "
+ say "                                           "
+
+ parse arg dsn .
+ dsn = strip(dsn,,"'")               /* remove surrounding quotes */
+
+ /*_______________________________________________________________*/
+ /* Execute /usr/lpp/cbclib/bin/dwarfdump -zt   to extract source */
+ /*_______________________________________________________________*/
+
+ /* tso oshell                                                    */
+ /* /usr/lpp/cbclib/bin/dwarfdump -zt "//'ABC.LOAD(COBOL01)'"     */
+ /*                     dwarfdump -h   for options                */
+
+ /* format: dwarfdump -zt "//'ABC.LOAD(COBOL01)'"                 */
+ cmd = 'dwarfdump -zt '!!'"//'!!"'"dsn"'"!!'"'
+
+ stdin.0 = 0
+
+ env.1='PATH=/usr/lpp/cbclib/bin'
+ env.0 = 1
+
+ call bpxwunix cmd,stdin.,stdout.,stderr.,env.
+
+ if stderr.0 > 0 then do
+   say 'Error processing dwarfdump for dsn = 'dsn
+   do i=1 to stderr.0
+     say 'i ='i' stderr.i =  'stderr.i
+   end /* do i=1 to stderr.0 */
+   exit(12)
+ end /* if stderr.0 > 0 */
+
+ /* SOURCE file definition                                        */
+ time_stamp = t!!time('s')
+ dsnsrc = userid()"."rexxname"."time_stamp       /* SOURCE file   */
+ "allocate fi(source) da('"dsnsrc"') reuse",
+ "new catalog",
+ "lrecl(80) recfm(f b) blksize(0)",
+ "space(1 15) tracks"
+ arc = rc
+ if arc > 0 then do
+    say rexxname" SOURCE allocate gave code "arc
+    exit(12)
+ end /* if arc > 0 */
+
+ /* Clean up stdout. New stem is stdout2.                         */
+ j = 0
+ stdout2. =
+ do i=1 to stdout.0
+   parse var stdout.i first ':' second
+
+   if second = ''               then iterate
+   if pos('srclines',first) > 0 then iterate
+   if pos('offset',first)   > 0 then iterate
+
+   j = j + 1
+   stdout2.j = substr(second,2)
+ end /* do i=1 to stdout.0 */
+ stdout2.0 = j
+
+ /* Write stdout2. into SOURCE                                    */
+ "execio "stdout2.0" diskw  source (stem stdout2. fini"
+ erc = rc
+ if erc > 0 then do
+    say rexxname" stdout2. execio gave code "erc
+    exit(12)
+ end /* if erc > 0 */
+
+ /* Display SOURCE                                                */
+ "ispexec lminit dataid(dd1) dataset('"dsnsrc"') enq(shr)"
+ lrc = rc
+ if lrc > 0 then do
+    say rexxname" dsnsrc lminit gave code "lrc
+    exit(12)
+ end /* if lrc > 0 */
+ "ispexec view   dataid("dd1")"
+
+ /* Clean up                                                      */
+ "free fi(source)"
+ drop stdin.
+ drop stdout.
+ drop stdout2.
+ drop stderr.
+ drop env.
+ "ispexec lmfree dataid("dd1")"
+ x = msg("off")
+ address tso
+ "delete '"dsnsrc"'"
+ x = msg(x)
+
+ exit
