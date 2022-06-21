@@ -1,0 +1,209 @@
+/* rexx */
+trace o
+
+/* Write content of JES2 file referenced by 'ddname'         */
+/* of first job or stc 'jobname'                             */
+/* in queue 'queue' ('EXECUTION' or 'PRINT' or any if '')    */
+/* on output dataset 'dsnout'                                */
+/*    (replacing it or if it does not exist,                 */
+/*    on a new sequential RECFM=FBA,LRECL=133 file).         */
+/*    or on a provided ddname, prefixing the ddname          */
+/*    by 'DD:'.                                              */
+
+/* Examples of use:                                          */
+/* dsnout = 'ABC.DSNOUT'                                     */
+/* xrc = xdc('RMFM3B3','JESMSGLG','EXECUTION',dsnout)        */
+/*                                                           */
+/* ddout  = 'DDOUT1'                                         */
+/* xrc = xdc('RMFM3B3','JESMSGLG','EXECUTION','DD:'ddout)    */
+/*                                                           */
+/* xrc = 0 if everything is fine.                            */
+/* xrc = 1 truncation (output LRECL too small).              */
+/* JESJCLIN and SYSIN need LRECL=81.                         */
+/* JESMSGLG needs LRECL=133.                                 */
+/* xrc > 1 other error.                                      */
+
+jobname = arg(1) /* e.g. 'RMFM3B3'                           */
+ddname  = arg(2) /* e.g. 'JESMSGLG'                          */
+queue   = arg(3) /* e.g. 'EXECUTION'                         */
+
+if translate(left(arg(4),3)) = 'DD:' then do
+   use_dsnout = 0 /* use ddout                               */
+   ddout = substr(arg(4),4) /* e.g. 'DDOUT1'                 */
+end /* if translate(left(arg(4),3)) = 'DD:'                  */
+else do /* use dsnout                                        */
+   use_dsnout = 1
+   dsnout  = arg(4) /* e.g. 'ABC.DSNOUT'                     */
+end /*     use dsnout                                        */
+
+xrc = jobname_ddname_queue(jobname,ddname,queue)
+/* gives isfline.                                            */
+/* xrc = jobname_ddname_queue('RMFM3B3','JESMSGLG')          */
+if xrc = 0 then do /* stem isfline. obtained                 */
+
+if use_dsnout then do
+   /* Allocate ouput file.                                   */
+   ddout    = 'DD'random(99999)
+   msg = sysdsn(dsnout)
+   select /* according to msg                                */
+     when msg = 'OK' then do
+      "alloc f("ddout") da('"dsnout"') shr reu"
+         alloc_ddout_rc = rc
+     end /* when msg = 'OK'                                  */
+     when msg = 'DATASET NOT FOUND' then do /* allocate new  */
+      "alloc f("ddout")",
+             "da('"dsnout"')",
+             "unit(sysallda) tr sp(60 30)",
+             "recfm(f b a) lrecl(133)",
+             "new catalog reu"
+         alloc_ddout_rc = rc
+     end /* when msg = 'DATASET NOT FOUND'                   */
+     otherwise do /* error case                              */
+         parse source . . rexxname .
+         say rexxname': sysdsn('dsnout') gave:'
+         say msg
+         alloc_ddout_rc = 16
+     end /* otherwise, error case                            */
+   end /* select according to msg                            */
+   call check_rc alloc_ddout_rc,0,'alloc f(ddout)'
+end /* if use_dsnout                                         */
+
+/* Copy stem isfline. into dataset referenced by ddout.      */
+address mvs "execio * diskw "ddout" (stem isfline. fini"
+   execio_rc = rc
+   call check_rc execio_rc,0,'execio isfline.'
+
+   call myexit(0)
+end /* if xrc = 0     stem isfline. obtained                 */
+else call myexit(xrc)  /* error                              */
+
+/*___________________________________________________________*/
+myexit:
+parse arg xrc
+zispfrc = xrc
+if sysvar(sysispf) = 'ACTIVE' then
+   address ispexec 'vput zispfrc'
+exit zispfrc
+
+/*___________________________________________________________*/
+check_rc:
+/* call example:    call check_rc rc,0,'libdef isptlib'   */
+
+if arg(1)<=arg(2) then return
+parse source . . rexxname .
+say rexxname': FUNC='arg(3) 'RC='arg(1)
+if ZERRMSG  <> 'ZERRMSG'  then say 'ZERRMSG  = 'ZERRMSG
+/* ISPEXEC or ISREDIT error:                              */
+if ZERRSM   <> 'ZERRSM'   then say 'ZERRSM   = 'ZERRSM
+if ZERRLM   <> 'ZERRLM'   then say 'ZERRLM   = 'ZERRLM
+if ZEDMSGNO <> 'ZEDMSGNO' then say 'ZEDMSGNO = 'ZEDMSGNO
+if ZEDISMSG <> 'ZEDISMSG' then say 'ZEDISMSG = 'ZEDISMSG
+if ZEDILMSG <> 'ZEDILMSG' then say 'ZEDILMSG = 'ZEDILMSG
+call myexit(arg(1))
+
+/*___________________________________________________________*/
+jobname_ddname_queue: procedure expose isfline.
+
+/* input:  jobname or STC name                               */
+/*         ddname (e.g. 'JESMSGLG')                          */
+/*         optional queue ('EXECUTION' or 'PRINT')           */
+/* output: stem isfline. with content of file associated     */
+/*         to ddname.                                        */
+
+/* Call example 1:                                           */
+/* xrc = jobname_ddname_queue('RMFM3B3','JESMSGLG','EXECUTION') */
+/* if xrc = 0 then                                           */
+/*    do i = 1 to isfline.0; say isfline.i; end              */
+/* else exit 20                                              */
+/*                                                           */
+/* We extract the content in stem isfline. of the JES2 file  */
+/* JESMSGLG of STC 'RMFM3B3' which is executing.             */
+/* Only xrc = 0 is acceptable.                               */
+
+/* Call example 2:                                           */
+/* xrc = jobname_ddname_queue('RMFM3B3','JESMSGLG')          */
+/*       queue optional                                      */
+/*       (we use any queue, 'EXECUTION' or 'PRINT')          */
+
+rc = isfcalls("on")
+/*___________________________________________________________*/
+jobname    = arg(1)      /* may be generic as *RMF*          */
+                         /* may be STC                       */
+ddname     = arg(2)      /* e.g. JESMSGLG, JESJCL, ...       */
+queue      = arg(3)      /* e.g. 'EXECUTION', 'PRINT'        */
+                         /* queue is optional                */
+
+isfprefix  = jobname     /* corresponds to PREFIX command    */
+isfowner   = '*'         /* corresponds to OWNER command     */
+isfsysname = mvsvar(sysname)
+isfinput   = 'on'        /*  include JESJCLIN, SYSIN         */
+                         /*  as INPUT ON                     */
+
+isfdest = ' ' !! ,    /* Dest name 1 */
+          ' ' !! ,    /* Dest name 2 */
+          ' ' !! ,    /* Dest name 3 */
+          ' '         /* Dest name 4 */
+/*___________________________________________________________*/
+address sdsf "isfexec st"
+lrc = rc
+if lrc <> 0 then do
+   call list_messages
+   rc = isfcalls("off")
+   return 12
+end /* isfexec st failed                                     */
+
+/* say "isfcols  = "isfcols */   /* list of column names     */
+found = 0 /* assume not found                                */
+do i=1 to jname.0
+   if jname.i = jobname & (queue.i = queue ! queue = '') then do
+      address sdsf "isfact st token('"token.i"') parm(np ?)"
+      lrc = rc
+      if lrc <> 0 then do
+          say "** isfact np ? failed with rc = "lrc"."
+          call list_messages
+          rc = isfcalls("off")
+          return 20
+      end /* ISFACT NP ? failed                              */
+      /* say  "isfrows2 = "isfrows2                          */
+      do m = 1 to isfrows2 /* for all datasets in job        */
+         if ddname.m = ddname then do
+            found = 1
+            address sdsf "isfbrowse st token('"token.m"')"
+            lrc = rc
+            if lrc <> 0 then do
+                say "** isfbrowse failed with rc = "lrc"."
+                call list_messages
+                rc = isfcalls("off")
+                return 28
+            end /* isfbrowse failed                          */
+            leave m
+         end /* if ddname.m = ddname                         */
+      end /* do m = 1 to isfrows2 */
+      leave i
+   end /* if jname.i = jobname & (queue.i = queue ! queue = '') */
+end /* do i=1 to jname.0                                     */
+
+if found =0 then do
+   parse source . . rexxname .
+   msg_part = rexxname': jobname 'jobname' with ddname 'ddname
+   if queue = '' then say msg_part ' not found.'
+                 else say msg_part 'and queue 'queue' not found.'
+   return 32
+end /* if found =0                                           */
+
+rc = isfcalls("off")
+return 0
+
+/*___________________________________________________________*/
+list_messages: /* when using isfcalls                        */
+
+if datatype(isfmsg.0) = 'NUM' then
+   do n = 1 to isfmsg.0
+      say 'n = 'n' isfmsg.'n' = 'isfmsg.n
+   end /* do n = 1 to isfmsg.0                               */
+if datatype(isfmsg2.0) = 'NUM' then
+   do n = 1 to isfmsg2.0
+      say 'n = 'n' isfmsg2.'n' = 'isfmsg2.n
+   end /* do n = 1 to isfmsg2.0                              */
+return /* from list_messages                                 */
+/*___________________________________________________________*/

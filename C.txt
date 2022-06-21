@@ -1,0 +1,777 @@
+  /* rexx */
+
+  /* This rexx issue MVS or JES2 commands                      */
+  /* and may process Unix commands using as 'standard input'   */
+  /* a sequential MVS file named:                              */
+  /* prefix.jobname.rexxname.queue                             */
+  /* Please type:                                              */
+  /* Command ===> tso c                      or                */
+  /* Command ===> tso c help                                   */
+  /* for examples.                                             */
+
+  trace o
+  parse arg argu
+
+  /*___________________________________________________________*/
+  /* Display help if requested or implied.                     */
+  argu_first = translate(word(strip(argu),1))
+  select
+    when argu_first = '' ! argu_first = 'HELP' then do
+         call display_help
+         exit
+    end /* when argu_first = '' ! argu_first = 'HELP'          */
+    otherwise nop
+  end /* select                                                */
+  /* End of display help if requested or implied.              */
+  /*___________________________________________________________*/
+  if sysvar('SYSNEST') <> "YES" then
+     say "Kindly use Command ===> tso c          for details"
+  /* Say one time if recursive use.                            */
+
+  call process_argu
+  /* Update variable queue.                                    */
+  /* queue = "no" or queue = ">" or queue = ">>"               */
+
+  call get_queue_file_name_dsnqueue
+  /* dsnqueue used as 'standard input' in case of 'c unix ...' */
+
+  /*___________________________________________________________*/
+  /* Set up command                                            */
+
+  drop c.
+  c.0 = 1
+  c.1 = left(argu,80)
+
+  /*___________________________________________________________*/
+  /* Execute command.                                          */
+  /* Result in isfulog. stem                                   */
+  drop isfulog.
+  isfulog.0 = 0                          /* initialize         */
+  xrc = 0                                /* initialize         */
+
+  select
+    when translate(word(c.1,1)) = 'TSO'  then call process_tso_command
+    when translate(word(c.1,1)) = 'UNIX' then call process_unix_command
+    when translate(word(c.1,1)) = 'EXECQ'   then call execq
+    when translate(word(c.1,1)) = 'SUBMITQ' then call submitq
+    when translate(word(c.1,1)) = 'MACROQ'  then call macroq
+    when translate(word(c.1,1)) = 'REPLY'   then call process_reply
+    when translate(word(c.1,1)) = 'CLEARQ'  then call clearq
+    when translate(word(c.1,1)) = 'VIEWQ'   then call viewq
+    when translate(word(c.1,1)) = 'COPYTOQ' then call copytoq
+    when translate(word(c.1,1)) = 'COPYFROMQ' then call copyfromq
+    when translate(word(c.1,1)) = 'DELQ'    then call delq
+    when translate(word(c.1,1)) = 'FREEQ'   then call freeq
+    when translate(word(c.1,1)) = 'NOP'  then nop /* null cmd  */
+    otherwise do                         /* MVS or JES2 cmd    */
+      rc = isfcalls("on")                /* access = on        */
+      isfcons = "sdsf"random()           /* console = sdsfxxx  */
+      isfdelay = 1 /* Wait 1 second before retrieving results  */
+      address sdsf isfslash "("c.") (wait)"
+      xrc = rc                           /* save return code   */
+      rc = isfcalls("off")               /* access = off       */
+    end                                  /* MVS or JES2 cmd    */
+  end                                    /* select             */
+
+  /*___________________________________________________________*/
+  /* If error, display command and error code.                 */
+  /*                                                           */
+
+  if xrc > 0 then do
+     say "execution of "
+     do i = 1 to c.0
+        say '  'strip(c.i)
+      end /* do i = 1 to c.0                                   */
+      say "gave code "xrc
+      if queue <> "no" then call insert_into_queue_file
+      call myexit(16)
+  end /* if xrc > 0                                            */
+
+  /*___________________________________________________________*/
+  /* If ok, display result.                                    */
+  /*                                                           */
+
+  drop stem.
+
+  /* No left shift for IMS command or DB2 command.                */
+  DB = translate(left(strip(c.1),1)) /* first non blank character */
+  /* IM first two characters starting by a non blank.             */
+  IM = translate(left(strip(c.1),2))
+  if IM = 'IM' !! pos(DB,'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 0 then do
+     do i = 1 to isfulog.0
+        stem.i = isfulog.i /* no change                           */
+     end /* do i = 1 to isfulog.0                                 */
+  end /* if IM = 'IM' !! pos(DB,'ABCDEFGHIJKLMNOPQRSTUVWXYZ') = 0 */
+  else do
+     do i = 1 to isfulog.0
+        stem.i = strip(isfulog.i,'L') /* remove leading blanks    */
+     end /* do i = 1 to isfulog.0                                 */
+  end /*                                                          */
+  stem.0 = isfulog.0
+
+  call show_stem
+  if queue <> "no" then call insert_into_queue_file
+  call myexit(0)
+
+  /*___________________________________________________________*/
+ myexit:
+  parse arg xrc
+  zispfrc = xrc
+  if sysvar(sysispf) = 'ACTIVE' then
+     address ispexec 'vput zispfrc'
+  exit zispfrc
+  /*___________________________________________________________*/
+  process_argu:
+
+  /* Check for presence of "> q" or ">> q" at end              */
+  queue = "no" /* default                                      */
+  wp = lastwordpos(">>",argu)
+  if wp > 0 then do /* ">>" present                            */
+     if translate(left(word(argu, wp+1),1)) = "Q" then do
+        queue = ">>"
+        argu = delword(argu,wp,2) /* remove ">> q"             */
+     end /* if translate(left(word(argu, wp+1),1)) = "Q"       */
+     return
+  end /* ">>" present                                          */
+  wp = lastwordpos(">",argu)
+  if wp > 0 then do /* ">" present                             */
+     if translate(left(word(argu, wp+1),1)) = "Q" then do
+        queue = ">"
+        argu = delword(argu,wp,2) /* remove "> q"              */
+     end /* if translate(left(word(argu, wp+1),1)) = "Q"       */
+     return
+  end /* ">" present                                           */
+  return
+/*____________________________________________________________ */
+show_stem: procedure expose stem.
+
+call get_lc_all /* Please change get_lc_all.                   */
+if stem.0 = 0 then return /* empty stem                        */
+/* Direct standard error to standard output.                   */
+filevar = "/tmp/tmp"random(99999)".txt"
+cmd = 'LC_ALL='lc_all' cat > 'filevar' 2>&1'
+  xrc = bpxwunix(cmd,stem.,out.)
+  if datatype(out.0) = 'NUM' then
+     do i = 1 to out.0; say "out."i" = "out.i; end
+
+/* Visualize output file in foreground.                        */
+if sysvar("sysispf") = 'ACTIVE' &, /*   and                    */
+   sysvar("sysenv")  = 'FORE'
+   then do
+     address ispexec
+       "control errors return"
+       "control nondispl enter"
+       parm = ";recov on;caps off"
+       "view file(filevar) macro(nop) parm(parm)"
+       /* alternative: oedit "/tmp/"tempfile                   */
+   end /* in foreground                                        */
+else do i = 1 to stem.0 /* not in foreground                   */
+        say stem.i
+     end /* not in foreground                                  */
+
+/* Remove temporary file.                                      */
+cmd = 'LC_ALL='lc_all 'rm 'filevar' 2>&1'
+  xrc = bpxwunix(cmd,,out.)
+  if datatype(out.0) = 'NUM' then
+     do i = 1 to out.0; say "out."i" = "out.i; end
+return
+/*____________________________________________________________ */
+insert_into_queue_file:
+
+  if queue = ">" then /* delete define                         */
+    if sysdsn("'"dsnqueue"'") = 'OK' then do
+       msg_prev = msg('off')
+         "free f(queue)"
+         "del '"dsnqueue"'"
+       msg_off  = msg(msg_prev)
+    end /* if sysdsn("'"dsnqueue"'") = 'OK'                    */
+
+  if queue = ">"  then alloc_mode = "new"
+  if queue = ">>" then alloc_mode = "mod"
+  "alloc f(queue) da('"dsnqueue"') "alloc_mode" catalog",
+  "unit(sysallda) tr sp(1 15)",
+  "recfm(f b) lrecl(132) reu"
+    help_alloc_queue_file_rc = rc
+    call check_rc help_alloc_queue_file_rc,0,'Alloc queue file failed'
+
+  "newstack"
+  if translate(word(c.1,1)) <> 'UNIX' then do
+     /* queue command                                          */
+     queue copies("=",80) /* separator                         */
+     do i = 1 to c.0
+        queue c.i
+     end /* do i = 1 to c.0                                    */
+     queue copies("_",80) /* separator                         */
+  end /* if translate(word(c.1,1)) <> 'UNIX'                   */
+  /* queue result                                              */
+  do i = 1 to isfulog.0
+     queue isfulog.i
+  end /* do i = 1 to isfulog.0                                 */
+  address mvs "execio "queued()" diskw queue (fini"
+    execio_rc = rc
+    call check_rc execio_rc,0,'execio on queue file failed'
+  "delstack"
+  "free f(queue)"
+  return
+/*___________________________________________________________*/
+check_rc:
+/* call example:    call check_rc rc,0,'libdef isptlib'      */
+
+if arg(1)<=arg(2) then return
+parse source . . rexxname .
+say rexxname': FUNC='arg(3) 'RC='arg(1)
+if ZERRMSG  <> 'ZERRMSG'  then say 'ZERRMSG  = 'ZERRMSG
+/* ISPEXEC or ISREDIT error:                                 */
+if ZERRSM   <> 'ZERRSM'   then say 'ZERRSM   = 'ZERRSM
+if ZERRLM   <> 'ZERRLM'   then say 'ZERRLM   = 'ZERRLM
+if ZEDMSGNO <> 'ZEDMSGNO' then say 'ZEDMSGNO = 'ZEDMSGNO
+if ZEDISMSG <> 'ZEDISMSG' then say 'ZEDISMSG = 'ZEDISMSG
+if ZEDILMSG <> 'ZEDILMSG' then say 'ZEDILMSG = 'ZEDILMSG
+call myexit(arg(1))
+
+/*___________________________________________________________________*/
+process_tso_command:
+
+/* Execute tso command following word 'tso'.                         */
+cmd = subword(c.1,2) /* tso command after 'c tso'                    */
+stem_name = outtrap('isfulog.') /* stem to get display output        */
+  cmd
+outtrap_off = outtrap('off')
+
+return
+/*___________________________________________________________________*/
+process_unix_command:
+
+ /* Note: 'U' is abbreviation for 'UNLOAD' MVS command.              */
+ /*       We therefore use 'UNIX' to indicate that what follows      */
+ /*       'UNIX' is a unix command with queue file as standard input.*/
+
+/* Execute unix command following word 'unix'.                       */
+  cmd = subword(c.1,2) /* unix command after 'c unix'                */
+/* queue file dsnqueue is standard input.                            */
+  if sysdsn("'"dsnqueue"'") = 'OK'
+     then "alloc f(queue) da('"dsnqueue"') shr reu"
+     else call deldefq
+
+  call get_lc_all /* Please change get_lc_all                        */
+  env.0 = 1; env.1 = "LC_ALL="lc_all
+  xrc = bpxwunix(cmd,'dd:queue',isfulog.,err.,env.)
+  "free f(queue)"
+
+  /* debug
+  if datatype(isfulog.0) = 'NUM' then
+     do i = 1 to isfulog.0; say "isfulog."i" = "isfulog.i; end
+     debug */
+  if datatype(err.0) = 'NUM' then
+     do i = 1 to err.0; say "err."i" = "err.i; end
+
+return
+/*___________________________________________________________________*/
+process_reply:
+
+ /* Call examples:                                                   */
+ /* Command ===> tso c reply ICK,U                                   */
+ /* Reply 'U' to the reply containing the character string 'ICK'.    */
+ /* Command ===> tso c reply IMSG,/DIS TRAN ABC                      */
+ /* Reply '/DIS TRAN ABC'                                            */
+ /* to the reply containing the character string 'IMSG'.             */
+
+/* Parse what follows "c reply".                                     */
+  rest = subword(c.1,2) /* what follows 'c reply'                    */
+  parse var rest regex "," reply_string
+
+parse source . . rexxname . /* rexxname in upper case                */
+rexxname "d r,r > q"        /* recursive call                        */
+
+/* awk written in French IBM-1147 code page                          */
+/*                French IBM-1147    US IBM-1140 (IBM-037 with Euro) */
+/*                ---------------    -----------                     */
+/* left  bracket  '51'x              'C0'x                           */
+/* right bracket  '54'x              'D0'x                           */
+/* vertical bar   'BB'x              '4F'x      (pipe symbol)        */
+
+/* "" is replaced by " within ".                                     */
+rexxname "unix awk -F* /"regex"/'{print $2}' |",
+         "awk '{print """rexxname """$1"""reply_string"""}'  > q"
+
+rexxname "execq > q"
+
+return
+/*___________________________________________________________________*/
+get_queue_file_name_dsnqueue:
+
+call set_up_prefix /* create prefix for new file                     */
+jobname = mvsvar('symdef','jobname')
+parse source . . rexxname .
+dsnqueue = prefix"."jobname"."rexxname".queue"
+
+return
+/*___________________________________________________________________*/
+set_up_prefix:
+
+/* Set up new output file prefix.                                    */
+prefix = sysvar('syspref')              /* tso profile prefix        */
+uid    = sysvar('sysuid')               /* tso userid                */
+if prefix = '' then prefix = uid        /* use uid if null prefix    */
+if prefix <> '' & prefix <> uid then    /* different prefix than uid */
+   prefix = prefix'.'uid                /* use prefix.uid            */
+
+return
+/*___________________________________________________________________*/
+clearq:
+
+/* If queue file exists, it is deleted.                              */
+/* The queue file is then created empty with open then close.        */
+call deldefq
+
+/* The qeue file is freed.                                           */
+"free f(queue)"
+
+return
+/*___________________________________________________________________*/
+viewq:
+
+dsnqueue_status = sysdsn("'"dsnqueue"'")
+
+if dsnqueue_status <> 'OK' then do
+   say "In viewq: dsnqueue = "translate(dsnqueue)
+   say "          dsnqueue_status = "dsnqueue_status"."
+   say "          We exit."
+   return
+end /* if dsnqueue_status <> 'OK'                                    */
+
+/* Below: dsnqueue_status = 'OK'.                                    */
+/* In ISPF foreground, visualize file dsnqueue.                      */
+/* Otherwise, write its content with say.                            */
+
+if sysvar("sysispf") = 'ACTIVE' &, /*   and                          */
+   sysvar("sysenv")  = 'FORE'
+   then do
+     address ispexec
+       "control errors return"
+       "control nondispl enter"
+       parm = ";recov on;caps off"
+       "view dataset('"dsnqueue"') macro(nop) parm(parm)"
+     address /* from ispexec                                         */
+   end /* in foreground                                              */
+else do /* not in ISPF foreground                                    */
+
+    "alloc f(queue) da('"dsnqueue"') shr reuse"
+      viewq_alloc_queue_file_rc = rc
+      call check_rc viewq_alloc_queue_file_rc,0,'Viewq:',
+          'Alloc queue file failed'
+
+     address mvs "execio * diskr queue (stem stem. fini"
+       viewq_execio_rc = rc
+       call check_rc viewq_execio_rc,0,'Viewq:',
+            'Execio on queue file failed.'
+
+     say
+     say "Content of "translate(dsnqueue)":"
+     say copies('_',80) /* separator                                 */
+     do i = 1 to stem.0
+        say stem.i
+     end /* do i = 1 to stem.0                                       */
+     say copies('_',80) /* separator                                 */
+
+    /* The qeue file is freed.                                       */
+    "free f(queue)"
+end /* not in ISPF foreground                                        */
+
+return
+/*___________________________________________________________________*/
+copytoq:
+
+/* Example of use:                                                   */
+/* Command ===> tso c copytoq 'ABC.PDSE(MEMBER1)'                    */
+/* Replace dsnqueue                                                  */
+/* RECFM=FB,LRECL=132 format: prefix"."jobname"."rexxname".queue"    */
+/* by the content of 'ABC.PDSE(MEMBER1)'.                            */
+
+/* Parse what follows "c copytoq".                                   */
+  rest = subword(c.1,2) /* what follows 'c copytoq'                  */
+  parse var rest dsn .
+  dsn = strip(strip(dsn),,"'")               /* remove quotes if any */
+
+if pos(left(dsn,1),'/.') = 0 then do /* not Unix                     */
+   dsn_status = sysdsn("'"dsn"'")
+
+   if dsn_status <> 'OK' then do
+      say "In copytoq: dsn = "translate(dsn)
+      say "            dsn_status = "dsn_status"."
+      say "            We exit."
+      return
+   end /* if dsn_status <> 'OK'                                      */ */
+
+/* Below: dsnqueue_status = 'OK'.                                    */
+/* Build dsn format acceptable to cat or cp.                         */
+/* Example: cat "//'ABC.PDSE(MEMBER1)'"                              */
+   dsn = "//'"dsn"'"       /* Add // and quotes.                     */
+end /* if pos(left(dsn,1),'/.') = 0     not Unix                     */
+
+/* Issue command to write to queue.                                  */
+parse source . . rexxname . /* rexxname in upper case                */
+/* Two consecutive double quotes in expression surrounded            */
+/*     by double quotes will be replaced by one double quote.        */
+/* The '> q' at end is preprocessed by rexxname.                     */
+rexxname "unix cat """dsn""" > q"             /* recursive call      */
+
+return
+/*___________________________________________________________________*/
+copyfromq:
+
+/* Example of use:                                                   */
+/* Command ===> tso c copyfromq 'ABC.PDSE(MEMBER)'                   */
+/* Replace 'ABC.PDSE(MEMBER)'                                        */
+/* by the content of dsnqueue. dsnqueue is                           */
+/* RECFM=FB,LRECL=132 format: prefix"."jobname"."rexxname".queue"    */
+
+/* Parse what follows "c copyfromq".                                 */
+  rest = subword(c.1,2) /* what follows 'c copyfromq'                */
+  parse var rest dsn .
+  dsn = strip(strip(dsn),,"'")               /* remove quotes if any */
+
+parse source . . rexxname . /* rexxname in upper case                */
+if pos(left(dsn,1),'/.') = 0 then do /* not Unix                     */
+   parse var dsn dsn0 '(' .
+   dsn_status = sysdsn("'"dsn0"'")
+
+   if dsn_status <> 'OK' then do
+      say "In copyfromq dsn = "translate(dsn0)
+      say "            dsn initial status = "dsn_status"."
+      say "            We exit."
+   end /* if dsn_status <> 'OK'                                      */ */
+
+/* Build dsnames for cp (same format as for cat).                    */
+/* dsnqueue_f dsnqueue formatted                                     */
+   dsnqueue_f = "//'"translate(dsnqueue)"'"
+   dsnqueue_f = '"'dsnqueue_f'"'
+   dsn_f = "//'"translate(dsn)"'"  /* e.g.  //'ABC.PDSE(MEMBER1)'    */
+   dsn_f = '"'dsn_f'"'             /* e.g. "//'ABC.PDSE(MEMBER1)'"   */
+
+/* Issue cp command to write from dsnqueue to dsn.                   */
+   rexxname "unix cp "dsnqueue_f" "dsn_f
+/* Example: cp "//'ABC.QUEUE'"  "//'ABC.PDSE(MEMBER1)'"              */
+end /* if pos(left(dsn,1),'/.') = 0     not Unix                     */
+else do /* Unix file as output. dsnqueue is standard input.          */
+   rexxname "unix cat > "dsn
+end     /* Unix file as output                                       */
+
+return
+/*___________________________________________________________________*/
+delq:
+
+msg_prev = msg('off')
+ "free f(queue)"
+ "del '"dsnqueue"'"
+msg_off  = msg(msg_prev)
+
+return
+/*___________________________________________________________________*/
+freeq:
+
+msg_prev = msg('off')
+ "free f(queue)"
+msg_off  = msg(msg_prev)
+
+return
+/*___________________________________________________________________*/
+deldefq:
+
+/* If queue file exists, it is deleted.                              */
+/* The queue file is then created empty with open then close.        */
+/* No free.                                                          */
+
+if sysdsn("'"dsnqueue"'") = 'OK' then do
+   msg_prev = msg('off')
+     "del '"dsnqueue"'"
+   msg_off  = msg(msg_prev)
+end /* if sysdsn("'"dsnqueue"'") = 'OK'                              */
+
+"alloc f(queue) da('"dsnqueue"') mod catalog",
+"unit(sysallda) tr sp(1 15)",
+"recfm(f b) lrecl(132)"
+  clear_alloc_queue_file_rc = rc
+  libelle = 'Clear alloc queue file failed'
+  call check_rc clear_alloc_queue_file_rc,0,libelle
+
+address mvs "execio 0 diskw queue (fini" /* open close               */
+  execio_rc = rc
+  call check_rc execio_rc,0,'open close on queue file failed'
+
+return
+/*___________________________________________________________________*/
+execq:
+
+/* Execute queue file dsnqueue with or without parameters.           */
+/* queue file mais contain a rexx or a clist.                        */
+
+/* Remove apostrophes from what follows execq, if present.           */
+stem_name = outtrap('isfulog.') /* stem to get display output        */
+  /* Remove apostrophes from what follows execq, if present.         */
+  rest = strip(subword(c.1,2),,"'")
+  "exec '"dsnqueue"'   '"rest"'"
+   execq_exec_rc  = rc
+outtrap_off = outtrap('off')
+call check_rc execq_exec_rc,0,'Execq exec on 'dsnqueue' failed.'
+
+return
+/*___________________________________________________________________*/
+submitq:
+
+/* Submit queue file.                                                */
+
+stem_name = outtrap('isfulog.') /* stem to get display output        */
+  /* Truncate to 80 characters. Use Unix submit.                     */
+  /* whence cut gives /bin/cut                                       */
+  /* Standard input is dsnqueue.                                     */
+  /* cut input is standard input.                                    */
+
+  call get_lc_all
+  /* pipe symbol (vertical bar) is '4F'x in US     IBM-1140 codepage.*/
+  /* pipe symbol (vertical bar) is 'BB'x in French IBM-1147 codepage.*/
+  /* Confer Wikipedia Code_page_37 (IBM-1140 differs by Euro sign).  */
+  select /* according to lc_all                                      */
+    when lc_all = "En_US.IBM-1140" then pipe = '4F'x /* US           */
+    when lc_all = "Fr_FR.IBM-1147" then pipe = 'BB'x /* French       */
+    otherwise pipe = '4F'x  /* US default                            */
+  end /* select                                                      */
+
+  parse source . . rexxname .
+  rexxname "unix /bin/cut -c 1-80 "pipe" /bin/submit"
+outtrap_off = outtrap('off')
+
+return
+/*___________________________________________________________________*/
+macroq:
+
+ /* Execute macro on queue file.                                     */
+
+dsnqueue_status = sysdsn("'"dsnqueue"'")
+if dsnqueue_status <> 'OK' then do
+   say "In macroq dsnqueue = "translate(dsnqueue)
+   say "          dsnqueue_status = "dsnqueue_status"."
+   say "          We exit."
+   return
+end /* if dsnqueue_status <> 'OK'                                    */
+
+if sysvar("sysispf") <> 'ACTIVE' then do
+   say "In macroq dsnqueue = "translate(dsnqueue)
+   say "          No ISPF environment."
+   say "          We exit."
+   return
+end /* if sysvar("sysispf") <> 'ACTIVE'                              */
+
+/* Below: dsnqueue_status = 'OK' and ISPF is active.                 */
+
+address ispexec
+  "control errors return"
+  rest = subword(c.1,2) /* what follows 'c macroq'                   */
+  /* rest may contain, for instance: 'macro1'  or  'macro1 abc def'  */
+  macro = word(rest,1)    /* first word                              */
+  parm  = subword(rest,2) /* what follows macro                      */
+  "view dataset('"dsnqueue"') macro("macro") parm(parm)"
+address /* from ispexec                                              */
+
+return
+/*___________________________________________________________________*/
+lastwordpos: procedure
+/* returns last word position or zero if not present                 */
+/* call example: lwp = lastwordpos(needle,haystack)                  */
+
+needle   = arg(1)
+haystack = arg(2)
+if words(haystack) = 0          then return 0
+if wordpos(needle,haystack) = 0 then return 0
+/* needle is present                                                 */
+haystack2 = '' /* from last word to first word                       */
+do i = words(haystack) to 1 by -1
+   haystack2 = haystack2 word(haystack,i)
+end /* do i = words(haystack) to 1                                   */
+return words(haystack) - wordpos(needle,haystack2) + 1
+/*___________________________________________________________________*/
+display_help:
+
+  parse source . . rexxname .
+  "newstack"
+  queue "HELP for rexx "rexxname":"
+  queue "Examples of call:                                    "
+  queue "Command ===> tso c d a       <-- MVS  command D A    "
+  queue "Command ===> tso c $di       <-- JES2 command $DI    "
+  queue "Command ===> tso c d a > q   <-- replace queue file  "
+  queue "Command ===> tso c d a >> q  <-- add to queue file   "
+  call get_queue_file_name_dsnqueue
+  queue "           queue file is "translate(dsnqueue)
+  queue "           prefix.jobname.rexxname.queue"
+  queue "           queue file is standard input for unix commands."
+  queue "Command ===> tso c viewq      <-- display queue file"
+  queue "Command ===> tso c copytoq    'ABC.PDSE(MEMBER1)'"
+  queue "Command ===> tso c copyfromq  'ABC.PDSE(MEMBER1)'"
+  queue "Command ===> tso c clearq     <-- empty queue file"
+  queue "Command ===> tso c delq       <-- delete queue file"
+  queue "Command ===> tso c execq > q  <-- execute queue as a rexx"
+  queue "Command ===> tso c execq 'ABC' > q <-- execute with parm 'ABC'"
+  queue "Command ===> tso c submitq         <-- submit queue file"
+  queue "Command ===> tso c macroq macro1 <-- execute macro on queue file"
+  queue "Command ===> tso c macroq macro1 abc <-- macro with parm ABC"
+  queue " Example for macro1:                               "
+  queue "       /* rexx */                                  "
+  queue "       address isredit                             "
+  queue "       'macro (parm)'                              "
+  queue "       '(linenum) = linenum .zlast'                "
+  queue "       say 'parm = 'parm 'linenum = 'linenum       "
+  queue "       return                                      "
+  queue "Command ===> tso c nop > q         <-- no operation"
+  queue "Command ===> tso c tso time        <-- tso command time"
+  queue "Command ===> tso c tso time > q    <-- save result in queue"
+  queue "Command ===> tso c tso help lu     <-- show result in a file"
+  queue "Command ===> cmde                  <-- cmde to use lower case"
+  queue "Enter TSO commands below:"
+  queue "===> c unix cal sep 1752           <-- calendar unix command"
+  queue "===> c unix grep 'ABC' > q         <-- grep on queue file"
+  queue "===> c unix sed 's/A/B/g' > q      <-- sed on queue file"
+  queue "===> c unix awk ... > q            <-- awk on queue file"
+  queue "Command ===> tso c reply ICK,U     "
+  queue " Reply 'U' to the reply containing",
+      "the character string 'ICK'."
+  queue "Command ===> tso c reply IMSG,/DIS TRAN ABC "
+  queue " Reply '/DIS TRAN ABC' ",
+      "to the reply containing the character string 'IMSG'."
+  queue "Batch job example:"
+  queue "//C        EXEC PGM=IKJEFT1B                                 "
+  queue "//SYSEXEC  DD DISP=SHR,DSN=ABC.CNTL   Contains rexx C        "
+  queue "//SYSTSPRT DD SYSOUT=*                                       "
+  queue "//SYSTSIN  DD *                                              "
+  queue "       /* Syntax. Interactively: Command ===> tso c          "
+  queue "       /*                    or  Command ===> tso c help     "
+  queue "c                                                            "
+  queue "       /* MVS command                                        "
+  queue "c d a                                                        "
+  queue "       /* > q writes the result in file                      "
+  queue "       /*     prefix.jobname.C.QUEUE                         "
+  queue "c d a > q                                                    "
+  queue "       /* JES2 command                                       "
+  queue "c $di                                                        "
+  queue "       /* >> q adds the result to file                       "
+  queue "       /*     prefix.jobname.C.QUEUE                         "
+  queue "c $di >> q                                                   "
+  queue "       /* TSO command                                        "
+  queue "c tso time                                                   "
+  queue "       /* Unix command                                       "
+  queue "c unix cal sep 1752                                          "
+  queue "       /* IMS command for IMSX                               "
+  queue "c imsxdis a >> q                                             "
+  queue "       /* Reponse to the MVS reply                           "
+  queue "       /* We respond /DIS TRAN ABC to the reply which        "
+  queue "       /* somewhere, contains the character string 'IMSX'    "
+  queue "       /* (or a regular expression).                         "
+  queue "c reply IMSX,/DIS TRAN ABC                                   "
+  queue "       /* DB2 command for DBX",
+                "('?' in MVSX.PARMLIB(IEFSSNX0) )"
+  queue "c ?dis thread(*)                                             "
+  queue "//* End of batch job example.                                "
+  queue "End of HELP for rexx C. F3 to delete this file.              "
+
+  /* Write stack to stem line.                                       */
+  call bpxwunix 'cat','STACK',line.
+
+  "delstack"
+  call visualize
+
+  return
+/*___________________________________________________________________*/
+
+ visualize: procedure expose line. rexxname
+ /* Visualize.                                                       */
+ if line.0 > 0 then do
+ if sysvar("sysispf") <> 'ACTIVE' !, /*   or                         */
+    sysvar("sysenv")  <> 'FORE' then do
+       do i = 1 to line.0
+          say line.i
+       end /* do i = 1 to line.0                                     */
+       zispfrc = 0
+       exit zispfrc
+    end /* sysvar("sysispf") <> 'ACTIVE' !                           */
+        /* sysvar("sysenv")  <> 'FORE'                               */
+    else do /*       ispf ACTIVE in foreground                       */
+
+       /* Allocate visualization file.                               */
+       address tso
+       ran  = right(random(1,99999),5,'0')
+       ddnm = 'dd'ran                        /* choose random ddname */
+       call set_up_prefix /* create prefix for new file              */
+       dsnprint = prefix"."rexxname".R"ran
+       msg_prev = msg('off')
+       "alloc file("ddnm") da('"dsnprint"') new catalog",
+       "tracks space(5,15) reuse lrecl(132) recfm(f b) blksize(0)"
+       alloc_rc = rc
+       if alloc_rc <> 0 then do
+          say rexxname "could not allocate the visualization file."
+          say "We exit with code 16."
+          say "alloc rc = "alloc_rc
+          zispfrc = 16
+          address ispexec 'vput zispfrc'
+          exit zispfrc
+       end /* if alloc_rc <> 0                                       */
+       msg_off  = msg(msg_prev)
+       /* End of allocate visualization file.                        */
+
+       /* Write on visualization file.                               */
+       address mvs "execio" line.0  "diskw" ddnm "(stem line. fini"
+       execio_rc = rc
+       if execio_rc <> 0 then do
+           say rexxname "could not write on visualization file."
+           say "We exit with code 16."
+           say "execio rc = "execio_rc
+           zispfrc = 16
+           address ispexec 'vput zispfrc'
+           exit zispfrc
+        end /* if execio_rc <> 0                                     */
+       /* End of write on visualization file.                        */
+
+       /* Visualize.                                                 */
+       address ispexec
+         "control errors return"
+         "control nondispl enter"
+         parm = ";res"
+         "view dataset('"dsnprint"') macro(nop) parm(parm)"
+       address /* from ispexec                                       */
+       /* End of visualize.                                          */
+
+       /* Clean up.                                                  */
+       msg_prev = msg('off')
+          "free fi("ddnm")"
+          "del  '"dsnprint"'"
+       msg_off  = msg(msg_prev)     /* reset                         */
+       /* End of clean up.                                           */
+
+    end /* ispf ACTIVE in foreground                                 */
+ end /* if line.0 > 0                                                */
+
+ return
+ /*___________________________________________________________________*/
+get_lc_all: procedure expose lc_all
+
+/* Please change according to your location.                         */
+lc_all = "En_US.IBM-1140"                         /* default US      */
+lc_all = "Fr_FR.IBM-1147" /* last one used */     /* default French  */
+
+/* Override lc_all only if in ISPF foreground.                       */
+if sysvar("sysispf") = 'ACTIVE' &, /*   and                          */
+   sysvar("sysenv")  = 'FORE'
+   then do
+     address ispexec
+       "control errors return"
+
+   /* ------------------------------------- *
+    | Obtain terminal codepage              |
+    | - ztermcp5 has 5 digits               |
+    | - "01147" for French                  |
+    * ------------------------------------- */
+
+    'vget ztermcp5 shared'
+    if ztermcp5 = "01147" then lc_all = "Fr_FR.IBM-1147"
+  address
+   end /* in ISPF foreground                                         */
+return
+/*___________________________________________________________________*/
