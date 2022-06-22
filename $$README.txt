@@ -151,7 +151,7 @@ rexx executing z/OS Unix commands
            rm -r $mydir                                                         
            mkdir $mydir                                                         
            //THIS$MBR DD *                                                      
-           awk 'sub("$", "Ár")'   $mbr       > $mbr".txt"                       
+           awk 'sub("$", "√ßr")'   $mbr       > $mbr".txt"                       
            iconv -f 1140 -t utf-8 $mbr".txt" > $mydir"/"$mbr                    
            //*                                                                  
            //* awk substitute to the null character before end of line,         
@@ -167,7 +167,7 @@ rexx executing z/OS Unix commands
            //*                                                                  
            //    EXEC UNIXEDIT,DSNIN=&DSNIN,DSNOUT=NULLFILE                     
            //BEGIN DD *,SYMBOLS=EXECSYS                                         
-           awk 'FNR==1Èprint "./ADD NAME="FILENAMEË;1' * > flat                 
+           awk 'FNR==1√©print "./ADD NAME="FILENAME√®;1' * > flat                 
            cp flat "//'&FLAT'"                                                  
            //*                                                                  
            //* * all members                                                    
@@ -194,7 +194,7 @@ rexx executing z/OS Unix commands
            //    EXEC UNIXEDIT,DSNIN=&DSNIN,DSNOUT=                             
            ls -al > DIR                                                         
            submit JOB*                                                          
-           £ cp or mv cannot be piped into                                      
+           ¬£ cp or mv cannot be piped into                                      
            cal sep 1752 > CAL      &&                                           
            cp CAL "//dd:ddout"     &&                                           
            rm CAL                                                               
@@ -217,19 +217,19 @@ rexx executing z/OS Unix commands
            cp out "//dd:out"                                                    
                                                                                 
            //    EXEC UNIXEDIT                                                  
-           £ Obtain machine model with uname. E.g.: 8561 (z15)                  
+           ¬£ Obtain machine model with uname. E.g.: 8561 (z15)                  
            echo "Model: $(uname -m)"                                            
-           £                                                                    
-           £ Alternative: obtain machine model with MVS display command D M=CPU 
-           £ Use _BPX_SHAREAS=YES with tso command                              
-           £ Using a rexx in the SYSEXEC allocation:                            
+           ¬£                                                                    
+           ¬£ Alternative: obtain machine model with MVS display command D M=CPU 
+           ¬£ Use _BPX_SHAREAS=YES with tso command                              
+           ¬£ Using a rexx in the SYSEXEC allocation:                            
            export SYSEXEC="alloc da('BOZO.EXEC') shr reuse"                     
-           £ export SYSEXEC=BOZO.EXEC:BOZO.EXEC2     Ok                         
-           £ c is a rexx in SYSEXEC allocation which executes a MVS command.    
-           £ D M=CPU is the executed command. Confer line with CPC SI for model.
+           ¬£ export SYSEXEC=BOZO.EXEC:BOZO.EXEC2     Ok                         
+           ¬£ c is a rexx in SYSEXEC allocation which executes a MVS command.    
+           ¬£ D M=CPU is the executed command. Confer line with CPC SI for model.
            tso c d m=cpu                                                        
-           £                                                                    
-           £ Other example of using the tso command:                            
+           ¬£                                                                    
+           ¬£ Other example of using the tso command:                            
            export _BPX_SHAREAS=YES                                              
            tso    time                                                          
            tso    "ex 'BOZO.EXEC(ABC)'"                                         
@@ -738,12 +738,28 @@ Miscellaneous rexx:
         TEMPNAME contains altlib act appl(exec) and libdef stack                
         to use own rexx and ispf libraries.                                     
         Example:                                                                
-        Command ===> tso o                                                      
+        Command ===> tso o
+        
+   c
+        This rexx exec issues MVS or JES2 commands
+        and may process Unix commands using as 'standard input'
+        a sequential MVS file named:
+        prefix.jobname.rexxname.queue
+        It responds to the MVS reply given a character string
+        present in the reply. 
+        To obtain help on rexx C, please type:
+        Command ===> tso c 
+        This rexx extends a previous rexx exec called c which
+        has been renamed into cold.      
                                                                                 
-   c                                                                            
+   cold     (previous rexx c)                                                                             
         Issues MVS or JES2 command thru  address sdsf isfslash                  
         Example:                                                                
-        Command ===> tso c d a         <-- MVS  command D A                     
+        Command ===> tso c d a         <-- MVS  command D A
+        
+   xdc
+        This called rexx exec writes the content of a JES2 file
+        on an output dataset.   
                                                                                 
    cmd                                                                          
         Called module.                                                          
@@ -836,13 +852,13 @@ Miscellaneous rexx:
                 VIEW      BOZO.CNTL                                             
         Command ===>                                                            
                    Name     Prompt       Size   Created    ...  ID              
-        id_______ J        <∞(((><          6  2018/03/15  ...  BOZO            
+        id_______ J        <¬∞(((><          6  2018/03/15  ...  BOZO            
                                                                                 
         After:                                                                  
                 VIEW      BOZO.CNTL                                             
         Command ===>                                                            
                    Name     Prompt       Size   Created    ...  ID              
-        _________ J                         6  2018/03/15  ...  <∞(((><         
+        _________ J                         6  2018/03/15  ...  <¬∞(((><         
                                                                                 
                                                                                 
    abo                                                                          
@@ -1109,23 +1125,23 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
          1) Command ===> tso lazy                                               
             displays special characters and above pangram.                      
                                                                                 
-         2) Command ===> tso lazy Bonjour []{}1Ä                                
+         2) Command ===> tso lazy Bonjour []{}1¬Ä                                
             displays a temporary file containing:                               
             Command ===>                                                        
             ****** ****************************                                 
-            000001 mine 1147 Bonjour []{}1Ä                                     
+            000001 mine 1147 Bonjour []{}1¬Ä                                     
                    98984FFFF4C9999A949B55F94444                                 
                    49550114702651649005141F0000                                 
             -----------------------------------                                 
-            000002 unix 1047 Bonjour ›~ÈË1                                      
+            000002 unix 1047 Bonjour √ù~√©√®1                                      
                    A98A4FFFF4C9999A94ABCDF34444                                 
                    459701047026516490DD001F0000                                 
             -----------------------------------                                 
-            000003 US   1140 Bonjour ¨|ÈË1Ä                                     
+            000003 US   1140 Bonjour ¬¨|√©√®1¬Ä                                     
                    EE444FFFF4C9999A94BBCDF94444                                 
                    420001140026516490AB001F0000                                 
             -----------------------------------                                 
-            000004 utf8 1208 ‚?>˘?Õ  $)£' Sb–                                   
+            000004 utf8 1208 √¢?>√π?√ç√ä $)¬£' Sb√ê                                   
                    AA8F4FFFF44666677255773E8A22                                 
                    43680120802FEAF520BDBD122C00                                 
                                                                                 
@@ -1136,7 +1152,7 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
         minutes elapsed and remaining. Terminal is locked.                      
          __ min __                                                              
         | 1    59 |                                                             
-         ØØØØØØØØØ                                                              
+         ¬Ø¬Ø¬Ø¬Ø¬Ø¬Ø¬Ø¬Ø¬Ø                                                              
                                                                                 
         To halt, press Attention key two times then                             
         type 'hi' (halt interpretation waiting up to 3 seconds).                
@@ -1307,9 +1323,9 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
         4) As an edit macro:                                                    
                    BOZO.DBRMLIB(BOZO01)                                         
         Command ===> vu                         (vu e to force Edit)            
-        000001 DBRM   `BOZO    BOZO01   – H Ï/   B                              
+        000001 DBRM   `BOZO    BOZO01   √ê H √¨/   B                              
         000002                                                                  
-        000003 DBRM   ]       œ       £@·‰< Í· ‰        ‰ÌÍÎ!Í „!Í              
+        000003 DBRM   ]       √è       ¬£@√°√§< √™√° √§        √§√≠√™√´!√™ √£!√™              
                                                                                 
                                                                                 
    SAV                                                                          
@@ -1461,7 +1477,7 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
                                                                                 
              JOB DATA SET DISPLAY                                               
         COMMAND INPUT ===>                                                      
-        NP   ££££ DDNAME   StepName                                             
+        NP   ¬£¬£¬£¬£ DDNAME   StepName                                             
                 1 JESMSGLG JES2                                                 
         se      2 JESJCL   JES2                                                 
                                                                                 
@@ -1480,7 +1496,7 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
                    BOZO.CNTL(JCL01)           - 01.0                            
         Command ===> ddn                                                        
         ****** ********************************* Top                            
-        000001 //BOZO    JOB '<∞(((><',CLASS=D,...                              
+        000001 //BOZO    JOB '<¬∞(((><',CLASS=D,...                              
         000002 //ASM    EXEC PGM=ASMA90,PARM=NODECK                             
                                                                                 
         In ISPF 3.4 as a line command (rexx):                                   
@@ -1526,7 +1542,7 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
         /*                                                                      
         //BOZO JOB ,CLASS=D,MSGCLASS=S,NOTIFY=&SYSUID,USER=&SYSUID              
         //* JCL comment and rexx sub-comment */                                 
-        //IEFBR14 EXEC PGM=IEFBR14,PARM='<∞(((><'                               
+        //IEFBR14 EXEC PGM=IEFBR14,PARM='<¬∞(((><'                               
         ///                                                                     
         */                                                                      
                                                                                 
