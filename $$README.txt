@@ -1653,4 +1653,22 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
         Command ===> tso arch                                                   
         Result, top right of screen: 'Architecture: ARCH(13)'                   
                                                                                 
-                                                                                
+   XMIT
+
+   This PROC submits a XMIT job which submits a RECEIVE job
+   if the return code of its XMIT step is zero.
+   It transmits sequential files or libraries.
+
+   Example of use:
+   //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
+   //            FROMDSN=&SYSUID..CNTL,
+   //            TODSN=&SYSUID..CNTL2,
+   //            CNTL=MVSC  SDSF where to check
+   Transmit a library named &SYSUID..CNTL from JES2 node MVSA
+   to JES2 node MVSB. Target library is named  &SYSUID..CNTL2.
+   If &SYSUID..CNTL2 does not exist, it is created. 
+   If it exists, there is copy with replacement.
+   All job outputs (XMIT ans RECEIVE) may be checked under SDSF
+   at node MVSC. The names of the XMIT and RECEIVE jobs are
+   &sysuid.X and &sysuid.R.
+   MVA, MVSB and MVSC may be indentical.                                                                             
