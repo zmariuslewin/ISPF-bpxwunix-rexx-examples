@@ -1,0 +1,113 @@
+//XMIT   PROC  FROM=,      JES2 source node
+//             TO=,        JES2 target node
+//             CNTL=&FROM, JES2 node where to check output under SDSF
+//*                        Default is FROM JES2 node
+//             FROMDSN=,   source dataset (sequential or library)
+//             TODSN=&FROMDSN, target dataset
+//*                        Default is FROMDSN (same name)
+//             TOOPTION=,  TOOPTION=MOD to add to TODSN if TODSN is
+//*                        a sequential dataset.   cf. help receive
+//             TOHOLD=05   Hold RECEIVE job by tohold 2 digit seconds
+//*_________________________________________________________________*
+//*
+//*      This PROC submits a XMIT job which submits a RECEIVE job
+//*      if the return code of its XMIT step is zero.
+//*_________________________________________________________________*
+//*      Call example:
+//* //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
+//* //            FROMDSN=&SYSUID..SEQ01,
+//* //            TODSN=&SYSUID..SEQ01.CLONE,
+//* //            CNTL=MVSC   SDSF where to check all job outputs
+//*_________________________________________________________________*
+//*
+//*      Job which contains this PROC:
+//*      It may be submitted from any JES2 node.
+//*
+//*      Size of file to be transmitted:
+//*      a file size of 200 to 300 CYL may be safe.
+//*
+//*      The parameter OUTLIM of the TRANSREC statement in
+//*      xxxx.PARMLIB(IKJTSO00) sets a limit.
+//*      If OUTLIM(10000000) then there is a limit of
+//*      10000000 x 80 characters (approximately 960 cylinders)
+//*      which may be transmitted.
+//*_________________________________________________________________*
+//*
+//       EXPORT SYMLIST=*
+//*
+//*      The four JES2 nodes FROM, TO, CNTL and the node
+//*      at which this job is submitted, are independent
+//*      and some, or all, may be identical.
+//*      SET to use EXPORT.
+//*
+//       SET FROM=&FROM
+//       SET TO=&TO
+//       SET CNTL=&CNTL
+//       SET FROMDSN=&FROMDSN
+//       SET TODSN=&TODSN
+//       SET TOOPTION=&TOOPTION
+//       SET TOHOLD=&TOHOLD
+//*_________________________________________________________________*
+//*
+//X        EXEC PGM=IEBGENER Submit to internal reader
+//SYSPRINT DD DUMMY
+//SYSUT2   DD SYSOUT=(A,INTRDR)
+//SYSIN    DD DUMMY
+//SYSUT1   DD DATA,DLM='End XMIT',SYMBOLS=CNVTSYS Local system symbols
+//&sysuid.X JOB (YOUR,ACCOUNTING),'XMIT to &to..u&lhhmmss',CLASS=A,     
+//             MSGCLASS=Z,MSGLEVEL=(1,1),NOTIFY=&SYSUID,
+//             CARDS=(99999999,WARNING), in 80 character card images
+//             BYTES=(999999,WARNING),   in thousands of bytes
+//             LINES=(999999,WARNING),   in thousands of lines
+//             PAGES=(99999999,WARNING)
+//*            _____ XMIT Job _____
+/*XEQ &from    Where to execute
+//OUT OUTPUT JESDS=ALL,DEST=&cntl Send JES2 datasets to node CNTL
+//*
+//XMIT     EXEC PGM=IKJEFT01
+//SYSTSPRT DD  SYSOUT=*,OUTPUT=*.OUT
+//* &lhhmmss local hours minutes seconds
+//SYSTSIN  DD *
+xmit &to..u&lhhmmss file(fromdd) noprolog noepilog nolog nonotify
+//FROMDD   DD DISP=SHR,DSN=&FROMDSN
+//*
+//R        EXEC PGM=IEBGENER,COND=(0,LT) Execute if XMIT gives COND 0
+//SYSPRINT DD DUMMY
+//SYSUT2   DD SYSOUT=(A,INTRDR)
+//SYSIN    DD DUMMY
+//SYSUT1   DD DATA,DLM='End RECEIVE'
+//&sysuid.R JOB (YOUR,ACCOUNTING),'RECEIVE u&lhhmmss',CLASS=A,          
+//             MSGCLASS=Z,MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*            _____ RECEIVE Job _____
+/*XEQ &to      Where to execute
+//    SCHEDULE HOLDUNTL='+00:00:&tohold' hold for so many seconds
+//OUT OUTPUT JESDS=ALL,DEST=&cntl Send JES2 datasets to this node
+//*
+//RECEIVE  EXEC PGM=IKJEFT01
+//SYSTSPRT DD  SYSOUT=*,OUTPUT=*.OUT
+//SYSTSIN  DD  *
+ /* Alternative to SCHEDULE HOLDUNTL (sleep &tohold seconds):
+ /* bpxbatch sh sleep &tohold
+receive userid(u&lhhmmss) nodisplay logdataset('nullfile')
+da('&todsn') &tooption
+End RECEIVE
+End XMIT                     End of scope for CNVTSYS
+//*XMIT   PEND
+//*
+//*  Examples of use of the XMIT proc:
+//*  //USERA   JOB (YOUR,ACCOUNTING),'JOB DESCRIPTION     ',CLASS=A,    
+//*  //             MSGCLASS=Z,MSGLEVEL=(1,1),NOTIFY=&SYSUID
+//*  //*
+//*  //*____________________________________________________________*
+//*  //*      This job is submitted on any JES2 node
+//*  //*
+//*  //*      Copy to &SYSUID..CNTL on MVSB
+//*  //*      Check output under SDSF of MVSA
+//*  //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
+//*  //            FROMDSN=&SYSUID..CNTL
+//*  //
+//*  //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
+//*  //            FROMDSN=&SYSUID..CNTL,
+//*  //            TODSN=&SYSUID..CNTL2,
+//*  //            CNTL=MVSC  SDSF where to check
+//*  //*____________________________________________________________*
