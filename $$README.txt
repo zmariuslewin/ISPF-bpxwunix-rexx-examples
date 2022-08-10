@@ -1655,20 +1655,44 @@ Batch job   WHERE  Batch job illustrating a search of a generic member
                                                                                 
    XMIT
 
-   This PROC submits a XMIT job which submits a RECEIVE job
-   if the return code of its XMIT step is zero.
-   It transmits sequential files or libraries.
+        This PROC submits a XMIT job which submits a RECEIVE job
+        if the return code of its XMIT step is zero.
+        It transmits sequential files or libraries.
 
-   Example of use:
-   //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
-   //            FROMDSN=&SYSUID..CNTL,
-   //            TODSN=&SYSUID..CNTL2,
-   //            CNTL=MVSC  SDSF where to check
-   Transmit a library named &SYSUID..CNTL from JES2 node MVSA
-   to JES2 node MVSB. Target library is named  &SYSUID..CNTL2.
-   If &SYSUID..CNTL2 does not exist, it is created. 
-   If it exists, there is copy with replacement.
-   All job outputs (XMIT ans RECEIVE) may be checked under SDSF
-   at node MVSC. The names of the XMIT and RECEIVE jobs are
-   &sysuid.X and &sysuid.R.
-   MVA, MVSB and MVSC may be indentical.                                                                             
+        Example of use:
+        //XMIT   EXEC XMIT,FROM=MVSA,TO=MVSB,
+        //            FROMDSN=&SYSUID..CNTL,
+        //            TODSN=&SYSUID..CNTL2,
+        //            CNTL=MVSC  SDSF where to check
+        Transmit a library named &SYSUID..CNTL from JES2 node MVSA
+        to JES2 node MVSB. Target library is named  &SYSUID..CNTL2.
+        If &SYSUID..CNTL2 does not exist, it is created. 
+        If it exists, there is copy with replacement.
+        All job outputs (XMIT ans RECEIVE) may be checked under SDSF
+        at node MVSC. The names of the XMIT and RECEIVE jobs are
+        &sysuid.X and &sysuid.R.
+        MVA, MVSB and MVSC may be indentical.                                                                             
+
+  DB                                                                      
+        Rexx and edit macro.                                                    
+                                                                                
+        It executes DB2 DSN subcommands or DB2 SQL statements.
+        SQL statements are executed with DSNTEP2. 
+        For help and examples:
+        Command ===> tso db 
+                   
+        Example as an edit macro:
+        VIEW       ABC.CNTL(SQL01)
+        Command ===> db           <- edit macro, also: db ssid(db2x)
+        ****** ***************************** Top of Data
+        000001        select 'ABC' from sysibm.sysdummy1;
+        000002        select 3*4
+        000003                 from sysibm.sysdummy1;
+
+        On command line:
+        Command ===> tso db select 'ABC' from sysibm.sysdummy1
+        Command ===> tso db 'ABC.CNTL(SQL01)'  
+        
+        In a rexx:
+        address mvs "execio" queued() "diskw "ddname" (fini"
+        "db dd:"ddname
