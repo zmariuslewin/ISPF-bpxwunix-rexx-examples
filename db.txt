@@ -1,0 +1,796 @@
+/* rexx */
+/* This a rexx or an edit macro.                                */
+
+/* Execute dsn subcommands                                      */
+/* otherwise execute interactively DB2 commands with DSNTEP2.   */
+
+/* Check:                                                       */
+/* the value of dsntep2_plan (assumed 'DSNTEP2') and            */
+/* the value of db2_runlib (assumed 'DSN.RUNLIB.LOAD')          */
+/*______________________________________________________________*/
+/*                                                              */
+/* Help starts                                                  */
+/* This rexx executes DB2 dsn subcommands                       */
+/* or it executes interactively DB2 SQL statements with DSNTEP2.*/
+
+/* Call examples:                                               */
+
+/* Command ===> tso db                     <- this help         */
+
+/* SQL statements execution (semi-colon at end):                */
+/* Rexx executing as an edit macro:                             */
+/* VIEW       ABC.CNTL(SQL01)                                   */
+/* Command ===> db           <- edit macro, also: db ssid(db2x) */
+/* ****** ***************************** Top of Data             */
+/* 000001        select 'ABC' from sysibm.sysdummy1;            */
+/* 000002        select 3*4                                     */
+/* 000003                 from sysibm.sysdummy1;                */
+/*                                                              */
+/* As a rexx before member name:                                */
+/*         VIEW ABC.CNTL                                        */
+/* Command ===>                                                 */
+/*            Name     Prompt       Size                        */
+/* db_______ SQL01                    10                        */
+/* db_______ SQL02    ssid=dba        20                        */
+/* _________ SQL03                    30                        */
+/*                                                              */
+/* As a rexx before dsname:                                     */
+/*   EDIT - Data Sets Matching ABC                              */
+/* Command ===>                                                 */
+/*                                                              */
+/* Command - Enter "/" to select action                         */
+/* --------------------------------------------                 */
+/*          ABC                                                 */
+/*          ABC.CNTL           <- before overwriting the line   */
+/* db /(sql01) .CNTL           <- after overwriting the line    */
+/* db /(sql01) ssid=db2a       <- adding ssid                   */
+/*                                                              */
+/* On command line:                                             */
+/* Command ===> tso db select 'ABC' from sysibm.sysdummy1       */
+/* Command ===> tso db 'HLQ.LLQ(TEP2CMD1)'     <- for DSNTEP2   */
+
+/* Command ===> cmde                                            */
+/* Enter TSO commands below:                                    */
+/* ===> db dd:DDTEP2                           <- for DSNTEP2   */
+
+/* Use inside a rexx:                                           */
+
+/* /* rexx */                                                   */
+/* /* Call example: Command ===> tso thisrexx user1 */          */
+/* /* Find tables created by user1.                 */          */
+/* parse arg creator                                            */
+/* ddname = 'dd'random(99999)                                   */
+/* "newstack"                                                   */
+/*   queue "select name from sysibm.systables"                  */
+/*   queue        "where creator='"creator"'"                   */
+/*   queue        ";"                                           */
+/*   "alloc f("ddname") unit(vio) tr sp(5) recfm(f) lrecl(80) reuse" */
+/*   address mvs "execio" queued() "diskw "ddname" (fini"       */
+/* "delstack"                                                   */
+/* "db dd:"ddname /* Execute DSNTEP2 */                         */
+/* "free f("ddname")"                                           */
+/* exit                                                         */
+
+/* dsn subcommands ('cmd' string anywhere for a dataset):       */
+
+/* Command ===> tso db -dis thread(*)                           */
+/* Command ===> tso db -dis thread(*) ssid(DB2X)                */
+/* Command ===> tso db run program(ABC)                         */
+/* Command ===> tso db cmd 'HLQ.LLQ(DSNCMD1)'                   */
+/* Command ===> tso db 'HLQ.LLQ(DSNCMD1)' cmd                   */
+/* Command ===> cmde                                            */
+/* Enter TSO commands below:                                    */
+/* ===> db dd:DD01 cmd                                          */
+
+/* As an edit macro:                                            */
+/* VIEW       ABC.CNTL(SUBCMD01)   dsn subcommands              */
+/* Command ===> db cmd                                          */
+/* ****** ***************************** Top of Data             */
+/* 000001        -dis thread(*)                                 */
+/* 000002        ...                                            */
+
+/* As a rexx before member name:                                */
+/*         VIEW ABC.CNTL                                        */
+/* Command ===>                                                 */
+/*            Name     Prompt       Size                        */
+/* db_______ SUBCMD01  cmd            10                        */
+/*                                                              */
+
+/* Batch use:                                                   */
+
+/*  //         EXEC PGM=IKJEFT1B                                */
+/*  //SYSEXEC  DD DISP=SHR,DSN=ABC.REXX contient rexx DB        */
+/*  //SYSTSPRT DD SYSOUT=*                                      */
+/*  //SYSTSIN  DD *                                             */
+/*  db -dis thread(*)                                           */
+/*  db cmd 'HLQ.LLQ(DB2CMD1)'      (cmd for dsn subcommands)    */
+/*  db cmd 'HLQ.LLQ(DB2CMD1)' ssid(DB2X)                        */
+/*  db cmd ssid=db2x 'HLQ.LLQ(DB2CMD1)'                         */
+/*  db select 'ABC' from sysibm.sysdummy1                       */
+/*  db select 3*4   +                                           */
+/*              from sysibm.sysdummy1;                          */
+/*  db 'HLQ.LLQ(SQL01)'        <- DSNTEP2 control cards         */
+/*  db 'HLQ.LLQ(SQL01)' ssid(DB2X)                              */
+/*  db dd:DDTEP2          <- DSNTEP2 control cards from ddname  */
+/*  //DDTEP2   DD DISP=SHR,DSN=HLQ.LLQ(SQL01)                   */
+
+/*______________________________________________________________*/
+
+/* Rexx details:                                                */
+/* If the command begins by '-',                                */
+/*    we execute it as a dsn subcommand.                        */
+
+/* If the command is included in the list:                      */
+/*    'RUN BIND REBIND DCLGEN END DCLGEN',                      */
+/*    'SPUFI START STOP TRACE FREE MODIFY ABEND'                */
+/*    we execute it as a dsn subcommand.                        */
+/*    (We do not add a dash before, if missing.                 */
+/*    In effect START et -START exist).                         */
+
+/* If the command contains 'cmd' anywhere,                      */
+/*    or one of its synonimous 'dsn', 'subcmd' or 'dsnsubcmd',  */
+/*    we remove it, then,                                       */
+/*       if the first word of the remaining command             */
+/*          is a valid dataset name,                            */
+/*          we execute the content of this dataset              */
+/*          as dsn subcommands,                                 */
+/*       if the first word of the remaining command             */
+/*          begins by 'DD:' immediately followed by a ddname,   */
+/*          we execute the content of the dataset referenced    */
+/*          by the ddname as dsn subcommands,                   */
+/*       otherwise we execute the remaining command             */
+/*          as a dsn subcommand.                                */
+
+/* Otherwise, we assume that we have to use interactively       */
+/*    DSNTEP2 to process SQL commands.                          */
+/*    If first parameter is a valid dsname,                     */
+/*       we execute the content of this file as the SYSIN       */
+/*       for DSNTEP2.                                           */
+/*    If first parameter begins by 'DD:' followed by a ddname   */
+/*       we execute the content of the file associated to       */
+/*       this ddname as the SYSIN for DNTEP2.                   */
+/*    If there is no dsname and no ddname, we execute           */
+/*       the SQL command (SELECT, etc...).                      */
+/*       We add a semicolon at the end of it, if missing.       */
+
+/* DB2 subsystem id choice:                                     */
+/*    If not indicated explicitly:                              */
+/*       If there is only one active DB2 subsystem,             */
+/*          its subsystem id is chosen.                         */
+/*       If there are several active DB2 subsystems, the user   */
+/*          is prompted interactively.                          */
+/*    Else the subsystem id may be indicated anywhere in        */
+/*       the command. E.g.:                                     */
+/*       Command ===> tso db 'ABC.CNTL(SQL01)' ssid(DB2X)       */
+/*       Command ===> tso db ssid=DB2X 'ABC.CNTL(SQL01)'        */
+/*       and the ssid information is removed before processing. */
+
+/*______________________________________________________________*/
+/* Help ends                                                    */
+/*                                                              */
+
+trace o
+parse source . . rexxname .
+cmd = arg(1)
+
+call check_if_process_as_an_edit_macro
+
+call try_to_extract_ssid_from_command(cmd)
+/* Returns ssid and                                             */
+/*         cmd (with ssid keyword removed if it was present).   */
+/* E.g.: 1) if arg(1) = 'ABC ssid(DB2A) DEF' then               */
+/*          ssid = 'DB2A' and                                   */
+/*          cmd = 'ABC DEF'                                     */
+/*       2) if arg(1) = 'ABC DEF' then                          */
+/*          ssid unchanged (initial value is 'SSID') and        */
+/*          cmd = 'ABC DEF'                                     */
+
+call is_help_needed(cmd)
+
+/* Check ssid or                                                */
+/* prompt for ssid in ISPF foreground.                          */
+/* Exit if ssid cannot be obtained.                             */
+ssid = check_ssid(ssid)
+
+/* 'CMD' is present if we request that the content of a dataset */
+/* be processed as dsn subcommands.                             */
+CMD_present = "no" /* initialize                                */
+call check_if_CMD_present(cmd)
+/* Returns CMD_present                                          */
+/*         cmd (with CMD keyword removed if it was present).    */
+/* E.g.: 1) if arg(1) = 'ABC CMD DEF' then                      */
+/*          CMD_present = "yes" and                             */
+/*          cmd = 'ABC DEF'                                     */
+/*       2) if arg(1) = 'ABC DEF' then                          */
+/*          CMD_present unchanged and                           */
+/*          cmd = 'ABC DEF'                                     */
+
+/* DSN subcommands not beginning by '-'                         */
+dsn_subcommands_list = 'RUN BIND REBIND DCLGEN END DCLGEN',
+                   'SPUFI START STOP TRACE FREE MODIFY ABEND'
+/* Ref: https://www.ibm.com/docs/en/db2-for-zos/12?topic=db2-commands */
+/* Note: there exist START and -START, STOP and -STOP.          */
+
+parse arg case .
+case = strip(case) /* remove spaces on both sides, if any       */
+select /* on case                                               */
+
+/*                       & AND                   ! OR           */
+when (left(case,1) = '-' & left(case,2) <> '--') !,
+     wordpos(case,dsn_subcommands_list) > 0 then do
+/* begins by '-' or dsn subcommand name does not begin by '-'   */
+     "newstack"         /* isolate queue statements             */
+     queue cmd
+     queue "end"
+     stem_name = outtrap('line.') /* stem to get output         */
+     "dsn s("ssid")"    /* will read cmd then end               */
+     outtrap_off = outtrap('off')
+     "delstack"         /* correlative of "newstack"            */
+     call visualize
+end /* when left(case,1) = '-'                                  */
+
+when CMD_present = "yes" then do
+     cmd = strip(cmd)
+     cmdu = translate(cmd)
+     word1 = word(cmdu,1)
+     msg_prev = msg('off')
+       /* Check if first word is valid dsname.                  */
+       sysdsn_result = sysdsn(word1)
+     msg_off  = msg(msg_prev)
+     select
+       when sysdsn_result = 'OK'
+               then do /* dsname present                        */
+                  dsn = word1
+                  "newstack"
+                  ddcmd = "dd"random(1,99999)
+                  "alloc f("ddcmd") da("dsn") shr reu"
+                  /* Write content of dsn to queue.             */
+                  address mvs "execio * diskr "ddcmd" (fini"
+                  queue "end"
+                  stem_name = outtrap('line.') /* output stem   */
+                  "dsn s("ssid")" /* execute dsn subcommands    */
+                  outtrap_off = outtrap('off')
+                  "delstack"
+                  "free f("ddcmd")"
+                  call visualize
+               end     /* dsname present                        */
+       when left(word1,3) = 'DD:'
+               then do /* ddname present                        */
+                  /* Write content to queue.                    */
+                  "newstack"
+                  address mvs "execio * diskr "substr(word1,4)" (fini"
+                  /* substr(word1,4) is ddname followind dd:    */
+                  queue "end"
+                  stem_name = outtrap('line.') /* output stem   */
+                  "dsn s("ssid")" /* execute dsn subcommands    */
+                  outtrap_off = outtrap('off')
+                  "delstack"
+                  call visualize
+               end     /* ddname present                        */
+        otherwise do
+             "newstack"
+             queue cmd
+             queue "end"
+             stem_name = outtrap('line.') /* output stem   */
+             "dsn s("ssid")"
+             outtrap_off = outtrap('off')
+             "delstack"
+             call visualize
+        end /* otherwise                                         */
+     end /* select                                              */
+end /* when CMD_present = "yes"                                 */
+
+otherwise do /* Assume DSNTEP2 command (SELECT etc ...)         */
+
+     /* Allocate SYSIN                                          */
+     cmd = strip(cmd)
+     cmdu = translate(cmd)
+     word1 = word(cmdu,1)
+     msg_prev = msg('off')
+       /* Check if first word is valid dsname.                  */
+       sysdsn_result = sysdsn(word1)
+     msg_off  = msg(msg_prev)
+     select
+       when sysdsn_result = 'OK'
+               then do /* dsname present                        */
+                  dsn = word1
+                  "alloc f(sysin) da("dsn") shr reu"
+               end     /* dsname present                        */
+       when left(word1,3) = 'DD:'
+               then do /* ddname present                        */
+                  /* substr(word1,4) is ddname followind dd:    */
+                  /* Use bpxwdyn to obtain dsname from ddname.  */
+                  dsn = ddname_to_dsname(substr(word1,4))
+                  /* SYSIN for DSNTEP2.                         */
+                  "alloc f(sysin) da("dsn") shr reu"
+               end     /* ddname present                        */
+        otherwise do   /*       no dsname, no ddname            */
+            /* Assume it a DB2 command (SELECT, etc ...).       */
+            /* Add ';' at end of command, if missing.           */
+            /* Ajoute ';' a la fin de la commande, si manquant. */
+            if right(cmd,1) <> ';' then cmd = cmd';'
+            /* Set up SYSIN                                     */
+            "newstack"
+              /* Debug:
+              queue "select 'ABC' from sysibm.sysdummy1;"
+              queue "select 'DEF' from sysibm.sysdummy1;"
+              */
+              queue cmd
+              "alloc f(sysin) unit(vio) tr sp(1) recfm(f) lrecl(80) reu"
+              address mvs "execio" queued() "diskw sysin (fini"
+            "delstack"
+        end /* otherwise   no dsname, no ddname                 */
+     end /* select                                              */
+
+     /* Allocate SYSPRINT                                       */
+        if sysvar("sysispf") = 'ACTIVE',
+         & sysvar("sysenv")  = 'FORE' then do  /* ISPF foreground */
+             "alloc f(sysprint) unit(vio) tr sp(1,15)",
+             "recfm(f b) lrecl(133) reu"
+             /* 133 corresponds to PAGEWIDTH in DSNTEP2 source    */
+        end /*                                    ISPF foreground */
+        else "alloc f(sysprint) da(*) reu"
+             /* in batch write on SYSTSPRT                      */
+
+     /* Run DSNTEP2                                             */
+     dsntep2_plan = "dsntep2"         /* assumed                */
+     /* program(dsntep2)  plan(dsntepd1) in manual              */
+     /* program(dsntep4)  plan(dsntp413) in manual              */
+     db2_runlib   = "dsn.runlib.load" /* assumed                */
+     "newstack"
+     queue "run program(dsntep2)",
+           "plan("dsntep2_plan")",
+           "lib('"db2_runlib"')",
+           "parms('/ALIGN(LHS)')"    /* ALIGN in caps           */
+           /* parms('/ALIGN(LHS)') left justified               */
+           /* parms('/ALIGN(MID)') middle, default              */
+     queue "end"
+     "dsn s("ssid")"    /* nom du DB2                           */
+     dsn_rc = rc
+     "delstack"
+     "free f(sysin)"
+
+     select /* according to dsn_rc                              */
+       when dsn_rc = 0 then nop
+       when dsn_rc = 4 then say "A SQL statement received",
+                                "a warning code. dsn_rc = "dsn_rc
+       when dsn_rc = 8 then say "A SQL statement received",
+                                "an error code. dsn_rc = "dsn_rc
+       otherwise say "dsn_rc = "dsn_rc /* dsn_rc = 12           */
+     end /* select according to dsn_rc                          */
+
+     /* Visualize SYSPRINT in ISPF foreground.                  */
+     if sysvar("sysispf") = 'ACTIVE' &, /*   and                */
+        sysvar("sysenv")  = 'FORE'
+          then call visualize_ddname(sysprint)
+
+     msg_prev = msg('off') /* if it was an edit macro           */
+       address tso "del '"dsn_copy"'"      /* delete            */
+     msg_off  = msg(msg_prev)
+
+     zispfrc = dsn_rc
+     if sysvar(sysispf) = 'ACTIVE' then
+        address ispexec 'vput zispfrc'
+     exit zispfrc
+end /* Assumed DSNTEP2 command                                  */
+end /* select                                                   */
+
+zispfrc = 0
+if sysvar(sysispf) = 'ACTIVE' then
+   address ispexec 'vput zispfrc'
+exit zispfrc
+/*______________________________________________________________*/
+visualize_ddname:
+
+ parse arg ddname
+ address ispexec
+   "control errors return"
+   "lminit dataid(dd1) ddname("ddname") enq(shr)"
+   "control nondispl enter"
+   parm = ";recov on;f SUCCESS;up 16"
+   "view dataid("dd1") macro(nop) parm(parm)"
+   /* Clean up                                                  */
+   address tso "free f("ddname")"
+  "lmfree dataid("dd1")"
+ address
+ return
+/*______________________________________________________________*/
+ddname_to_dsname: procedure
+parse arg ddname
+
+bpxwdyn_info_string =,
+        'info dd('ddname')',               /* input  ddname     */
+        'inrtdsn(inrtdsn)',                /* output dsname     */
+        'inrtmem(inrtmem)'                 /* output member     */
+
+ bpxwdyn_info_rc = bpxwdyn(bpxwdyn_info_string)
+ if bpxwdyn_info_rc <> 0 then do /* invalid call to bpxwdyn     */
+
+    say " Bpxwdyn 'info dd("ddname")' ... failed with rc = "bpxwdyn_info
+    if datatype(s99msg.0) = 'NUM' then do
+       if s99msg.0 > 0 then do
+          do m = 1 to s99msg.0
+             say '  's99msg.m
+          end /* do m = 1 to sg99msg.0                          */
+       end /* if s99msg.0 > 0                                   */
+    end /* if datatype(s99msg.0) = 'NUM'                        */
+    exit
+
+ end /* if bpxwdyn_info_rc <> 0                                 */
+ if inrtmem = '' then return "'"inrtdsn"'" /* sequential        */
+                 else return "'"inrtdsn"("inrtmem")'"
+/*______________________________________________________________*/
+
+ check_if_process_as_an_edit_macro: procedure expose cmd dsn_copy
+ /* if an edit macro then add dsname before parm in cmd         */
+ address isredit
+ "macro (parm)"
+ /* parm may contain the word 'cmd' which indicates that the    */
+ /* present content of the file is to be processed as           */
+ /* dsn subcommands.                                            */
+ isr_rc = rc
+ if isr_rc = 0 then do /* edit macro                            */
+
+  "(dsn0) = dataset"
+  "(mbr)  = member"
+    mbr = strip(mbr) /* '' when no member                       */
+    if mbr <> '' then dsn = dsn0'('mbr')'
+                 else dsn = dsn0 /* sequential                  */
+    dsn = "'"dsn"'" /* add quotes                               */
+
+     /* Copy present version, possibly unsaved, to dsn_copy.    */
+     /* Execute rexx on dsn_copy.                               */
+     /* Delete dsn_copy.                                        */
+     call set_up_prefix /* create prefix for new file           */
+     dsn_copy = prefix'.temp.t'!!right(random(1,99999),5,'0')
+     address tso, /* create file dsn_copy                       */
+       "alloc da('"dsn_copy"') like('"dsn0"')",
+       "dsorg(ps) tracks space(1,15)",
+       "new catalog" /* dsn_copy needs to be cataloged for exec */
+     "repl '"dsn_copy"' .zf .zl" /* copy to temporary file      */
+     address /* from isredit                                    */
+     cmd = "'"dsn_copy"'" parm
+ end /* isr_rc = 0 it is an edit macro                          */
+
+ return
+ /*___________________________________________________________________*/
+
+ set_up_prefix:
+
+ /* Set up new output file prefix.                                    */
+ prefix = sysvar('syspref')              /* tso profile prefix        */
+ uid    = sysvar('sysuid')               /* tso userid                */
+ if prefix = '' then prefix = uid        /* use uid if null prefix    */
+ if prefix <> '' & prefix <> uid then    /* different prefix than uid */
+    prefix = prefix'.'uid                /* use prefix.uid            */
+
+ return
+ /*_________________________________________________________________*/
+
+ is_help_needed: procedure expose rexxname
+  parse arg cmd
+
+  /* Good    for Command ===> tso db
+     but not for Command ===>     db
+         where it is supposed to be an edit macro
+  */
+
+  /* if no argument                                                   */
+  if length(space(cmd)) = 0 then
+     signal call_show_help
+
+  w1 = word(cmd,1) /* first parameter                                 */
+  if wordpos(translate(w1),'HELP -HELP H -H ? -? /? AIDE SOS') > 0
+  then signal call_show_help
+  else return
+
+  call_show_help: /* show help and exit                               */
+     call show_help
+
+     say "Kindly note that on "mvsvar('sysname')", the",
+         "DB2 subsystem ids are:"
+     say "ssid   status"
+     db2ssids = db2ssids()
+     do i = 1 to words(db2ssids) by 2
+        say word(db2ssids,i)'    'word(db2ssids,i + 1)
+     end /* do i = 1 to words(db2ssids) by 2                          */
+
+     zispfrc = 0
+     if sysvar(sysispf) = 'ACTIVE' then
+        address ispexec 'vput zispfrc'
+     exit zispfrc
+ /*___________________________________________________________________*/
+
+ show_help: procedure expose rexxname
+
+  say ' Help for rexx 'rexxname'    ',
+                 'sysname = 'mvsvar('sysname')'   '
+
+  /* Show help between 'Help starts' and 'Help ends'                  */
+  help = 'no'
+  line_counter = 0
+  do i = 1 to sourceline()
+     if pos('Help starts',sourceline(i)) > 0 then do
+        help = "yes"
+        iterate
+     end /* if pos('Help starts',sourceline(i)) > 0                   */
+     if pos('Help ends',sourceline(i)) > 0 then leave
+     if help = 'yes' then do /* record sourceline(i)                  */
+        line_counter = line_counter + 1
+        line.line_counter = sourceline(i)
+     end /* if help = 'yes'                                           */
+  end /* do i = 1 to sourceline()                                     */
+  line.0 = line_counter
+  call visualize
+ return
+ /*_____________________________________________________________*/
+ visualize: procedure expose line. rexxname
+
+ /* Visualize.                                                  */
+ if line.0 > 0 then do
+    if sysvar(sysispf) <> 'ACTIVE' then do
+       do i = 1 to line.0
+          say line.i
+       end /* do i = 1 to line.0                                */
+       zispfrc = 0
+       exit zispfrc
+    end /* if sysvar(sysispf) <> 'ACTIVE'                       */
+    else do /*       ispf ACTIVE                                */
+
+       /* Allocate visualization file.                          */
+       address tso
+       ran  = right(random(1,99999),5,'0')
+       ddnm = 'dd'ran                   /* choose random ddname */
+       call set_up_prefix /* create prefix for new file         */
+       dsnprint = prefix"."rexxname".R"ran
+       msg_prev = msg('off')
+       "alloc file("ddnm") da('"dsnprint"') new catalog",
+       "tracks space(50,500) reuse lrecl(132) recfm(f b) blksize(0)"
+       alloc_rc = rc
+       if alloc_rc <> 0 then do
+          say rexxname "could not allocate the visualization file."
+          say "We exit with code 16."
+          say "alloc rc = "alloc_rc
+          zispfrc = 16
+          address ispexec 'vput zispfrc'
+          exit zispfrc
+       end /* if alloc_rc <> 0                                */
+       msg_off  = msg(msg_prev)
+       /* End of allocate visualization file.                 */
+
+       /* Write on visualization file.                        */
+       "execio" line.0  "diskw" ddnm "(stem line. finis"
+       execio_rc = rc
+       if execio_rc <> 0 then do
+          say rexxname "could not write on visualization file."
+          say "We exit with code 16."
+          say "execio rc = "execio_rc
+          zispfrc = 16
+          address ispexec 'vput zispfrc'
+          exit zispfrc
+       end /* if execio_rc <> 0                               */
+       /* End of write on visualization file.                 */
+
+       /* Visualize.                                          */
+       address ispexec
+       "control errors return"
+       "control nondispl enter"
+       par = ";res"
+       "view dataset('"dsnprint"') macro(nop) parm(par)"
+       address /* from ispexec                                */
+       /* End of visualize.                                   */
+
+       /* Clean up.                                           */
+       msg_prev = msg('off')
+          "free fi("ddnm")"
+          "del  '"dsnprint"'"
+       msg_off  = msg(msg_prev)     /* reset                  */
+       /* End of clean up.                                    */
+
+    end /* ispf ACTIVE                                        */
+ end /* if line.0 > 0                                         */
+
+ return
+/*______________________________________________________________*/
+check_if_CMD_present: procedure expose cmd CMD_present
+/* SUBCMD, DSNSUBCMD or DSN may be used instead of CMD.         */
+
+/* Returns CMD_present                                          */
+/*         cmd (with CMD keyword removed if it was present).    */
+/* E.g.: 1) if arg(1) = 'ABC CMD DEF' then                      */
+/*          CMD_present = "yes" and                             */
+/*          cmd = 'ABC DEF'                                     */
+/*       2) if arg(1) = 'ABC DEF' then                          */
+/*          CMD_present unchanged and                           */
+/*          cmd = 'ABC DEF'                                     */
+
+ parse arg cmd
+ cmd = strip(cmd)      /* remove surrounding blanks, if any     */
+ cmdu = translate(cmd) /* uppercase                             */
+
+ do i = 1 to words(cmdu) /* scan for CMD or one synonimous      */
+    /* SUBCMD DSBSUBCMD DSN synonimous to CMD                   */
+    if wordpos(word(cmdu,i),'CMD SUBCMD DSNSUBCMD DSN') > 0 then do
+       CMD_present = "yes"
+       cmd = delword(cmd,i,1) /* remove found word              */
+       leave
+    end /* if wordpos(word(cmdu,i),'CMD SUBCMD DSNSUBCMD DSN') > 0  */
+ end /* do i = 1 to words(cmdu)                                 */
+
+ return
+/*______________________________________________________________*/
+try_to_extract_ssid_from_command: procedure expose cmd ssid
+
+/* Returns ssid and                                             */
+/*         cmd (with ssid keyword removed if it was present).   */
+/* E.g.: 1) if arg(1) = 'ABC ssid(DB2A) DEF' then               */
+/*          ssid = 'DB2A' and                                   */
+/*          cmd = 'ABC DEF'                                     */
+/*       2) if arg(1) = 'ABC DEF' then                          */
+/*          ssid unchanged (initial value is 'SSID') and        */
+/*          cmd = 'ABC DEF'                                     */
+
+ parse arg cmd
+ cmd = strip(cmd)      /* remove surrounding blanks, if any     */
+ cmdu = translate(cmd) /* uppercase                             */
+ /* Obtain 'SSID' position in uppercase command cmdu            */
+ pos = pos('SSID',cmdu)
+
+ if pos = 0 then return /* no 'SSID' in command                 */
+ /* Obtain ssid and remove ssid(...) or ssid=... from cmd       */
+ substr = substr(cmd,pos) /* starting from pos in cmd           */
+ ssid1 = word(substr,1)   /* first word                         */
+ /* Replace parents and equal sign by spaces.                   */
+ ssid1 = translate(ssid1,'   ','()=')
+ ssid = word(ssid1,2)     /* extracted ssid from cmd            */
+ cmd = substr(cmd,1,pos - 1)!!subword(substr,2)
+
+ return
+
+/*______________________________________________________________*/
+check_ssid: procedure expose db2ssids
+ parse arg ssid .
+ ssid = translate(ssid) /* capitalize                           */
+ db2ssids = db2ssids()
+ /* returns e.g. 'DB2A ACTIVE DB2B INACTIVE DB2C ACTIVE'        */
+
+ /* ssid was provided                                           */
+ if ssid <> 'SSID' then do
+    wp = wordpos(ssid,db2ssids)
+    if wp > 0 &,                           /* subsystem defined */
+       word(db2ssids,wp + 1) = "ACTIVE"    /* and active        */
+       then return ssid /*  accept                              */
+    else return request_ssid()
+ end /* if ssid <> 'SSID'     ssid provided                     */
+
+ /* ssid was not provided                                       */
+ if words(db2ssids) = 2 &,              /* only one subsystem   */
+    word(db2ssids,2) = "ACTIVE"         /* and active           */
+    then return word(db2ssids,1)
+    else return request_ssid()
+
+ return
+/*______________________________________________________________*/
+request_ssid: procedure expose db2ssids
+/* Request ssi in ISPF foreground, otherwise exit.              */
+
+/* In ISPF foreground.                                          */
+if sysvar("sysispf") = 'ACTIVE' &, /*   and                     */
+   sysvar("sysenv")  = 'FORE'
+   then do
+
+   say "DB2 subsystem list on "mvsvar('sysname')":"
+   do i = 1 to words(db2ssids) by 2
+      say '   ' word(db2ssids,i) word(db2ssids,i + 1)
+   end /* do i = 1 to words(db2ssids) by 2                      */
+   say
+   say "Please type the name of an active DB2 subsystem in this list"
+   say "or type CAN to cancel."
+   pull ssid /* in uppercase                                    */
+   if left(ssid,3) = 'CAN' then exit /* cancel                  */
+   return ssid
+
+end /* in ISPF foreground                                       */
+say "DB2 subsystem id not provided or DB2 subsystem inactive."
+say "Exit with code 10."
+say "DB2 subsystem id list on "mvsvar('sysname')":"
+      say '    ssid    status'
+   do i = 1 to words(db2ssids) by 2
+      say '   ' word(db2ssids,i)'    ' word(db2ssids,i + 1)
+   end /* do i = 1 to words(db2ssids) by 2                      */
+exit 10
+/*________________________________________________________________*/
+db2ssids: procedure
+trace o
+/*                                                                */
+/* DB2SSIDS                                                       */
+/* ========                                                       */
+/* Return the status of all DB2 subsystems defined on this LPAR.  */
+/*                                                                */
+/* Original rexx obtained at:                                     */
+/*          Google search:                                        */
+/*          "Specifying Db2 Subsystem ID - H390-MVS@groups.io"    */
+/*                                                                */
+/* Parms  : None                                                  */
+/* Rexx original output:                                          */
+/*      A line for each subsystem that is defined on the LPAR     */
+/*      of the following form:                                    */
+/*                                                                */
+/*           ssid { ACTIVE }                                      */
+/*                                                                */
+/*      i.e. each subsystem is listed and is flagged as ACTIVE    */
+/*      if running.                                               */
+/*                                                                */
+/* Original rexx of James Gill modified                           */
+/* to be used as an internal routine.                             */
+/* E.g:                                                           */
+/* db2_ssid_list = db2ssids()                                     */
+/* it returns the list of DB2 ssids each one followed by either   */
+/* the word 'ACTIVE' or 'INACTIVE'. Example:                      */
+/* db2_ssid_list = 'DB2A ACTIVE DB2B INACTIVE DB2C ACTIVE'        */
+/* In this exemple, the DB2 subsystem with subsystem id DB2A      */
+/* is defined and active. The DB2 subsystem with subsystem id     */
+/* DB2B is defined but not active.                                */
+db2_ssid_list = ''
+/*----------------------------------------------------------------*/
+/*                                                                */
+/* James Gill - November 2014                                     */
+/*                                                                */
+/*----------------------------------------------------------------*/
+   numeric digits 20
+   psa         = 0     /* psa absolute address                    */
+   psa_cvt     = 16    /* psa->cvt ptr offset                     */
+   cvt_jesct   = 296   /* cvt->jesct ptr offset                   */
+   jesct_sscvt = 24    /* jesct->sscvt ptr offset                 */
+   sscvt_sscvt = 4     /* sscvt->next sscvt ptr offset            */
+   sscvt_ssid  = 8     /* sscvt subsystem id offset               */
+   sscvt_ssvt  = 16    /* sscvt->ssvt                             */
+   sscvt_suse  = 20    /* subsystem user field (->ERLY)           */
+   sscvt_syn   = 24    /* has table synonym pointer               */
+   sscvt_sus2  = 28    /* subsystem user field                    */
+   sscvt_eyec  = 0     /* sscvt eyecatcher offset                 */
+   erly_id   = 0       /* ERLY block identifier ( = x'A5')        */
+   erly_size = 2       /* ERLY block size (= x'A8')               */
+   erly_eyec = 4       /* ERLY block eyecatcher                   */
+   erly_ssid = 8       /* DB2 subsystem id                        */
+   erly_mstr = 12      /* MSTR STC name                           */
+   erly_pclx = 20      /* PC LX value                             */
+   erly_ssvt = 34      /* ptr back to SSVT                        */
+   erly_ssgp = 38      /* ptr to DSN3SSGP (= 0 is subsystem is down) */
+   erly_scom = 56      /* ptr to SCOM (subsys communication block)   */
+   erly_modn = 84      /* DSN3EPX                                 */
+   cvt   = c2d(storage(d2x(psa + psa_cvt),4))
+   jesct = c2d(storage(d2x(cvt + cvt_jesct),4))
+   sscvt = c2d(storage(d2x(jesct + jesct_sscvt),4))
+   do while sscvt /= 0
+      subsystem = storage(d2x(sscvt + sscvt_ssid),4)
+      ssctssvt = c2d(storage(d2x(sscvt + sscvt_ssvt),4))
+      ssctsuse = c2d(storage(d2x(sscvt + sscvt_suse),4))
+      ssctsyn  = c2d(storage(d2x(sscvt + sscvt_syn),4))
+      ssctsus2 = c2d(storage(d2x(sscvt + sscvt_sus2),4))
+      if ssctsuse /= 0 then do   /* pointing to ERLY?             */
+         erly = ssctsuse
+         erlyid = c2x(storage(d2x(erly + erly_id),2))
+         if erlyid = "00A5" then do  /* id = ERLY                 */
+            erlysize = c2d(storage(d2x(erly + erly_size),2))
+            erlyeyec = storage(d2x(erly + erly_eyec),4)
+            if erlyeyec = "ERLY" then do  /* eyecatcher = ERLY    */
+               modn = strip(storage(d2x(erly + erly_modn),8))
+               if modn = "DSN3EPX" then do
+                  scom = c2d(storage(d2x(erly + erly_scom),4))
+
+                  if scom = 0
+                  then db2_ssid_list = db2_ssid_list subsystem,
+                                       'INACTIVE'
+                  else db2_ssid_list = db2_ssid_list subsystem,
+                                       'ACTIVE'
+
+               end /* if modn = "DSN3EPX"                         */
+            end /* if erlyeyec = "ERLY"                           */
+         end /* if erlyid = "00A5"                                */
+      end /* if ssctsuse /= 0                                     */
+      sscvt = c2d(storage(d2x(sscvt + sscvt_sscvt),4))
+   end /* do while sscvt /= 0                                     */
+return space(db2_ssid_list)
+/* space(db2_ssid_list) strips and one blank between words        */
+/*________________________________________________________________*/
