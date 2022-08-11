@@ -2,7 +2,7 @@
 /* This a rexx or an edit macro.                                */
 
 /* Execute dsn subcommands                                      */
-/* otherwise execute interactively DB2 commands with DSNTEP2.   */
+/* or execute interactively DB2 commands with DSNTEP2.          */
 
 /* Check:                                                       */
 /* the value of dsntep2_plan (assumed 'DSNTEP2') and            */
@@ -59,7 +59,7 @@
 /* /* Call example: Command ===> tso thisrexx user1 */          */
 /* /* Find tables created by user1.                 */          */
 /* parse arg creator                                            */
-/* ddname = 'dd'random(99999)                                   */
+/* ddname = 'dd'random(99999) /* or 'SYSIN' */                  */
 /* "newstack"                                                   */
 /*   queue "select name from sysibm.systables"                  */
 /*   queue        "where creator='"creator"'"                   */
@@ -299,27 +299,38 @@ otherwise do /* Assume DSNTEP2 command (SELECT etc ...)         */
        when left(word1,3) = 'DD:'
                then do /* ddname present                        */
                   /* substr(word1,4) is ddname followind dd:    */
-                  /* Use bpxwdyn to obtain dsname from ddname.  */
-                  dsn = ddname_to_dsname(substr(word1,4))
-                  /* SYSIN for DSNTEP2.                         */
-                  "alloc f(sysin) da("dsn") shr reu"
+                  dd0 = substr(word1,4) /* in uppercase         */
+                  if dd0 <> 'SYSIN' then do
+                     /* Allocate a vio SYSIN file and           */
+                     /* copy SQL statements into it.            */
+                     "alloc f(sysin) unit(vio)",
+                            "tr sp(5 15) recfm(f) lrecl(80) reu"
+                        alloc_SYSIN_rc  = rc
+                        call check_rc alloc_SYSIN_rc,0,'SYSIN allocate'
+                     msg_prev = msg('off')
+                     /* msg('off'): don't tell record number    */
+                       "repro ifile("dd0") ofile(sysin)"
+                          repro_rc  = rc
+                          call check_rc repro_rc,0,'repro to SYSIN'
+                     msg_off  = msg(msg_prev)
+                  end /* if dd0 <> 'SYSIN'                      */
                end     /* ddname present                        */
-        otherwise do   /*       no dsname, no ddname            */
-            /* Assume it a DB2 command (SELECT, etc ...).       */
-            /* Add ';' at end of command, if missing.           */
-            /* Ajoute ';' a la fin de la commande, si manquant. */
-            if right(cmd,1) <> ';' then cmd = cmd';'
-            /* Set up SYSIN                                     */
-            "newstack"
-              /* Debug:
-              queue "select 'ABC' from sysibm.sysdummy1;"
-              queue "select 'DEF' from sysibm.sysdummy1;"
-              */
-              queue cmd
-              "alloc f(sysin) unit(vio) tr sp(1) recfm(f) lrecl(80) reu"
-              address mvs "execio" queued() "diskw sysin (fini"
-            "delstack"
-        end /* otherwise   no dsname, no ddname                 */
+       otherwise do   /*       no dsname, no ddname             */
+           /* Assume it a DB2 command (SELECT, etc ...).        */
+           /* Add ';' at end of command, if missing.            */
+           /* Ajoute ';' a la fin de la commande, si manquant.  */
+           if right(cmd,1) <> ';' then cmd = cmd';'
+           /* Set up SYSIN                                      */
+           "newstack"
+             /* Debug:
+             queue "select 'ABC' from sysibm.sysdummy1;"
+             queue "select 'DEF' from sysibm.sysdummy1;"
+             */
+             queue cmd
+             "alloc f(sysin) unit(vio) tr sp(1) recfm(f) lrecl(80) reu"
+             address mvs "execio" queued() "diskw sysin (fini"
+           "delstack"
+       end /* otherwise   no dsname, no ddname                  */
      end /* select                                              */
 
      /* Allocate SYSPRINT                                       */
@@ -328,6 +339,8 @@ otherwise do /* Assume DSNTEP2 command (SELECT etc ...)         */
              "alloc f(sysprint) unit(vio) tr sp(1,15)",
              "recfm(f b) lrecl(133) reu"
              /* 133 corresponds to PAGEWIDTH in DSNTEP2 source    */
+                alloc_SYSPRINT_rc  = rc
+                call check_rc alloc_SYSPRINT_rc,0,'Allocate SYSPRINT'
         end /*                                    ISPF foreground */
         else "alloc f(sysprint) da(*) reu"
              /* in batch write on SYSTSPRT                      */
@@ -368,17 +381,36 @@ otherwise do /* Assume DSNTEP2 command (SELECT etc ...)         */
        address tso "del '"dsn_copy"'"      /* delete            */
      msg_off  = msg(msg_prev)
 
-     zispfrc = dsn_rc
-     if sysvar(sysispf) = 'ACTIVE' then
-        address ispexec 'vput zispfrc'
-     exit zispfrc
+     call myexit(dsn_rc)
 end /* Assumed DSNTEP2 command                                  */
 end /* select                                                   */
 
-zispfrc = 0
-if sysvar(sysispf) = 'ACTIVE' then
-   address ispexec 'vput zispfrc'
-exit zispfrc
+call myexit(0)
+
+/*___________________________________________________________*/
+myexit:
+
+ parse arg xrc
+ zispfrc = xrc
+ if sysvar(sysispf) = 'ACTIVE' then
+    address ispexec 'vput zispfrc'
+ exit zispfrc
+/*___________________________________________________________*/
+check_rc:
+/* call example:    call check_rc rc,0,'libdef isptlib'      */
+
+if arg(1)<=arg(2) then return
+parse source . . rexxname .
+say rexxname': FUNC='arg(3) 'RC='arg(1)
+if ZERRMSG  <> 'ZERRMSG'  then say 'ZERRMSG  = 'ZERRMSG
+/* ISPEXEC or ISREDIT error:                                 */
+if ZERRSM   <> 'ZERRSM'   then say 'ZERRSM   = 'ZERRSM
+if ZERRLM   <> 'ZERRLM'   then say 'ZERRLM   = 'ZERRLM
+if ZEDMSGNO <> 'ZEDMSGNO' then say 'ZEDMSGNO = 'ZEDMSGNO
+if ZEDISMSG <> 'ZEDISMSG' then say 'ZEDISMSG = 'ZEDISMSG
+if ZEDILMSG <> 'ZEDILMSG' then say 'ZEDILMSG = 'ZEDILMSG
+call myexit(arg(1))
+
 /*______________________________________________________________*/
 visualize_ddname:
 
@@ -394,31 +426,6 @@ visualize_ddname:
   "lmfree dataid("dd1")"
  address
  return
-/*______________________________________________________________*/
-ddname_to_dsname: procedure
-parse arg ddname
-
-bpxwdyn_info_string =,
-        'info dd('ddname')',               /* input  ddname     */
-        'inrtdsn(inrtdsn)',                /* output dsname     */
-        'inrtmem(inrtmem)'                 /* output member     */
-
- bpxwdyn_info_rc = bpxwdyn(bpxwdyn_info_string)
- if bpxwdyn_info_rc <> 0 then do /* invalid call to bpxwdyn     */
-
-    say " Bpxwdyn 'info dd("ddname")' ... failed with rc = "bpxwdyn_info
-    if datatype(s99msg.0) = 'NUM' then do
-       if s99msg.0 > 0 then do
-          do m = 1 to s99msg.0
-             say '  's99msg.m
-          end /* do m = 1 to sg99msg.0                          */
-       end /* if s99msg.0 > 0                                   */
-    end /* if datatype(s99msg.0) = 'NUM'                        */
-    exit
-
- end /* if bpxwdyn_info_rc <> 0                                 */
- if inrtmem = '' then return "'"inrtdsn"'" /* sequential        */
-                 else return "'"inrtdsn"("inrtmem")'"
 /*______________________________________________________________*/
 
  check_if_process_as_an_edit_macro: procedure expose cmd dsn_copy
@@ -495,10 +502,7 @@ bpxwdyn_info_string =,
         say word(db2ssids,i)'    'word(db2ssids,i + 1)
      end /* do i = 1 to words(db2ssids) by 2                          */
 
-     zispfrc = 0
-     if sysvar(sysispf) = 'ACTIVE' then
-        address ispexec 'vput zispfrc'
-     exit zispfrc
+     call myexit(0)
  /*___________________________________________________________________*/
 
  show_help: procedure expose rexxname
