@@ -1,0 +1,18 @@
+A way to start TK4 from WSL (Windows Subsystem for Linux):
+
+On my Windows desk, I have a file u.cmd
+It contains only:
+wsl ~/m
+I double click on it.
+
+My home directory ~ contains a file named m
+It contains:
+pushd ~/tk4
+yes | ./unattended/set_console_mode
+./mvs
+popd
+exit
+
+The Hercules script ~/tk4/scripts/tk4-.rc contains at the end of it:
+/stop mf1
+sh cmd.exe /c "C:\Program Files (x86)\TomBrennanSoftware\VistaTN3270\vistaTN3270.exe" standard.ses 
